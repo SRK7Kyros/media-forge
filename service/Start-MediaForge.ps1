@@ -22,9 +22,23 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# Task Scheduler discards the action's stdout, so a supervisor that only writes
+# there is invisible. Mirror every line into <repo>\logs\supervisor.log: the
+# restart loop is the only place that can explain why the watcher keeps dying.
+$script:SupervisorLog = Join-Path (Split-Path -Parent (Split-Path -Parent $PSCommandPath)) 'logs\supervisor.log'
+
 function Write-Line {
     param([string]$Text)
-    Write-Output ('{0:yyyy-MM-dd HH:mm:ss} {1}' -f (Get-Date), $Text)
+    $line = '{0:yyyy-MM-dd HH:mm:ss} {1}' -f (Get-Date), $Text
+    try {
+        $dir = Split-Path -Parent $script:SupervisorLog
+        if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+        Add-Content -LiteralPath $script:SupervisorLog -Value $line -ErrorAction Stop
+    }
+    catch {
+        # A supervisor that cannot write its own log must still supervise.
+    }
+    Write-Output $line
 }
 
 function Resolve-Python {
@@ -57,16 +71,32 @@ Write-Line "repo:   $RepoRoot"
 while ($true) {
     Write-Line 'starting mediaforge watch'
     $started = Get-Date
+    # Never pipe a native command's stderr into a pipeline while
+    # ErrorActionPreference is Stop: PowerShell turns each stderr line into an
+    # ErrorRecord, the first one throws, the pipe closes and the child dies.
+    # That produced a silent 30-second crash loop (measured 2026-11-12).
+    # Redirect to files instead and report them after the child exits.
+    $outFile = Join-Path $RepoRoot 'logs\watch.out'
+    $errFile = Join-Path $RepoRoot 'logs\watch.err'
+    $code = 1
     try {
-        & $pythonPath @argumentList 2>&1 | ForEach-Object { Write-Line $_ }
-        $code = $LASTEXITCODE
+        $proc = Start-Process -FilePath $pythonPath -ArgumentList $argumentList `
+            -WorkingDirectory $RepoRoot -NoNewWindow -PassThru -Wait `
+            -RedirectStandardOutput $outFile -RedirectStandardError $errFile
+        $code = $proc.ExitCode
     }
     catch {
         Write-Line "watcher failed to start: $($_.Exception.Message)"
-        $code = 1
     }
     $ran = ((Get-Date) - $started).TotalSeconds
     Write-Line "mediaforge watch exited with $code after $([int]$ran)s"
+    foreach ($stream in @($errFile, $outFile)) {
+        if (Test-Path -LiteralPath $stream) {
+            Get-Content -LiteralPath $stream -Tail 15 | Where-Object { $_ } | ForEach-Object {
+                Write-Line ("  " + $_)
+            }
+        }
+    }
 
     # A clean, long-lived run means somebody asked it to stop (lock taken by a
     # manual command, MF_WATCH_MODE=off, service stop); a crash loop is short.

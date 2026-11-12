@@ -88,7 +88,9 @@ falling back to a copy.
 plugins/            one module per source shape (detect + plan)
 src/                config, scan, registry, planner, reconciler, linker,
                     state, nfo, verify, watcher, jellyfin client, cli
-service/            Start- and Install-MediaForgeTask.ps1 (boot persistence)
+service/            Start-MediaForge.ps1, Install-MediaForgeTask.ps1,
+                    Uninstall-MediaForgeTask.ps1, Install-JellyfinService.ps1,
+                    Install-AdminTask.ps1, admin-run.ps1
 tests/              pytest, including a real NTFS tree end to end
 ```
 
@@ -108,16 +110,48 @@ uv pip install --python .venv\Scripts\python.exe -e .[dev]
 .venv\Scripts\python.exe -m src verify
 ```
 
-Boot persistence (runs as SYSTEM, no window, no login required):
+Boot persistence (runs as the interactive user via S4U — no password stored, no
+window, starts at boot):
 
 ```powershell
-# elevated
-.\service\Install-MediaForgeTask.ps1
+# elevated, once
+.\service\Install-MediaForgeTask.ps1 -RunAsUser
 Start-ScheduledTask -TaskName MediaForge
 ```
 
+The task registers two triggers (at startup, and every 5 min as a safety net) and
+runs `service\Start-MediaForge.ps1`, which supervises `mediaforge watch` and
+appends every exit to `logs\supervisor.log`. Exit code 4 (lock held by a manual
+command) sleeps 60 s and retries instead of fighting for the lock.
+
+**Do not pipe the child's stderr into a PowerShell pipeline while
+`$ErrorActionPreference = 'Stop'`**: with `2>&1` each stderr line becomes an
+ErrorRecord, the first one throws, the pipe closes and python dies — a silent
+30-second crash loop that looks exactly like "the watcher keeps restarting"
+(measured 2026-11-12). The supervisor redirects to files instead.
+
+Registered as the user rather than SYSTEM on purpose: the state database lives in
+`C:\ProgramData\media-forge`, whose `-wal`/`-shm` sidecars are created by whoever
+writes first. A SYSTEM-owned sidecar without the user's ACE makes every later
+`mediaforge sync` fail with `attempt to write a readonly database` (`SQLITE_READONLY`).
+
 Logs: `C:\ProgramData\media-forge\logs\mediaforge.log` (rotated daily, 14 kept).
 State: `C:\ProgramData\media-forge\mediaforge.db`.
+
+## Jellyfin on this host
+
+`service\Install-JellyfinService.ps1` registers Jellyfin 10.11.11 as the
+auto-start service `JellyfinServer` (nssm, data dir `C:\ProgramData\Jellyfin\Server`).
+It passes only space-free `--datadir/-configdir/-cachedir/-logdir` arguments:
+nssm hands `AppParameters` to the Win32 parser unquoted, so `--webdir "C:\Program
+Files\..."` arrives as `--webdir C:\Program` and the server exits with
+`content directory is either invalid or empty`.
+
+Then `mediaforge jellyfin-check` prints the three library ids; put them in `.env`
+as `MF_JELLYFIN_LIB_MOVIES/SHOWS/ANIME` together with `MF_JELLYFIN_API_KEY`
+(`POST /Auth/Keys?App=media-forge`). The refresh path is debounced (60 s), waits
+for Jellyfin to report idle, and leaves the markers in place if the call fails.
+Host-level detail, library options and the firewall rules: `~/.config/opencode/docs/jellyfin.md`.
 
 ## Tests
 

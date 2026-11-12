@@ -40,6 +40,29 @@ the source in place. **Never call, restore or re-implement that tool.**
 
 - Real sources: `D:\Shows\streaming-community` (movies + series),
   `D:\Shows\animeunity` (absolute-numbered anime). Clone root: `D:\Media\Jellyfin`.
-- State/logs: `C:\ProgramData\media-forge`. Scheduled task name: `MediaForge`.
+- State/logs: `C:\ProgramData\media-forge`. Scheduled task name: `MediaForge`
+  (runs as **the user**, S4U, at startup + every 5 min).
 - Running `sync`/`watch` while another instance runs returns exit code 4 — that is
   the lock, not a bug.
+
+## Traps measured on this host (do not re-learn them)
+
+- **Never pipe a native child's stderr into a pipeline with
+  `$ErrorActionPreference='Stop'`.** `& python ... 2>&1 | ForEach-Object` turns
+  each stderr line into an ErrorRecord, the first throws, the pipe closes and the
+  child dies: a 30 s crash loop whose only trace is a repeating "watching N root(s)"
+  line. `service\Start-MediaForge.ps1` redirects to `logs\watch.out|err` instead.
+- **Task identity and the SQLite sidecars must match.** `mediaforge.db-wal/-shm`
+  are created by whoever writes first; a SYSTEM-owned sidecar without the user's
+  ACE makes every user-side write fail with `attempt to write a readonly database`
+  (`SQLITE_READONLY`, 8 — distinct from `CANTLOCK`, 1032). Grant
+  `DESKTOP-1EHVJ82\Giulio:(OI)(CI)M` on the state dir and keep the task as the user.
+- **nssm passes `AppParameters` through the Win32 parser unquoted**, so an argument
+  value with a space truncates at it. `Install-JellyfinService.ps1` passes only
+  space-free paths and relies on `AppDirectory` for the rest.
+- Elevated work goes through the `MediaForgeAdmin` scheduled task (RunLevel Highest,
+  S4U): drop a script at `C:\ProgramData\media-forge\admin\job.ps1` and
+  `Start-ScheduledTask -TaskName MediaForgeAdmin`; output lands in `admin\job.log`,
+  and the job file is deleted before it runs to completion, so it cannot re-run.
+  That task is a standing privilege boundary — remove it with
+  `Unregister-ScheduledTask -TaskName MediaForgeAdmin -Confirm:$false`.
