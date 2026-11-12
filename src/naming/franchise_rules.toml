@@ -1,0 +1,66 @@
+# Franchise rules. Each rule is tried in file order; the first match wins.
+#
+# `match` is applied to the folder name with its trailing "(YYYY)" removed.
+# `order` says how the watch-order number is decoded from the match:
+#   dotted -> group "order" is "4.1"  => (4, 1)   [int parts, never floats]
+#   roman  -> group "roman" is "IV"   => (4,)
+#   int    -> group "num"  is "2"     => (2,)
+#   table  -> the whole folder name is looked up in `table`
+# `strip` = true replaces the folder name with the match's `title` group when
+# building the Jellyfin folder name; false keeps the folder name as it is.
+
+[[rule]]
+key = "MCU"
+sort_key = "MCU"
+set_name = "Marvel Cinematic Universe"
+match = '^MCU\s+(?P<order>\d+\.\d+)\s+-\s+(?P<title>.+)$'
+order = "dotted"
+strip = true
+
+[[rule]]
+key = "STAR WARS"
+sort_key = "STAR WARS"
+set_name = "Star Wars"
+match = '^Star Wars\s+-\s+Episodio\s+(?P<roman>[IVX]+)\b'
+order = "roman"
+strip = false
+
+[[rule]]
+key = "SPIDER-VERSE"
+sort_key = "SPIDER-VERSE"
+set_name = "Spider-Verse"
+order = "table"
+strip = false
+table = { "Spider-Man - Un nuovo universo" = 1, "Spider-Man - Across the Spider-Verse" = 2 }
+
+[[rule]]
+key = "ROCKY"
+sort_key = "ROCKY"
+set_name = "Rocky"
+order = "table"
+strip = false
+table = { "Rocky" = 1, "Rocky II" = 2, "Rocky III" = 3, "Rocky IV" = 4, "Rocky V" = 5, "Rocky Balboa" = 6 }
+
+[[rule]]
+key = "IL PADRINO"
+sort_key = "IL PADRINO"
+set_name = "Il padrino"
+order = "table"
+strip = false
+table = { "Il padrino" = 1, "Il padrino - Parte II" = 2, "Il padrino - Parte III" = 3 }
+
+[[rule]]
+key = "UNA NOTTE AL MUSEO"
+sort_key = "UNA NOTTE AL MUSEO"
+set_name = "Una notte al museo"
+order = "table"
+strip = false
+table = { "Una notte al museo" = 1, "Una notte al museo 2 - La fuga" = 2, "Una notte al museo 3 - Il segreto del faraone" = 3, "Una notte al museo - La vendetta di Kahmunrah" = 4 }
+
+[[rule]]
+key = "UNA NOTTE DA LEONI"
+sort_key = "UNA NOTTE DA LEONI"
+set_name = "Una notte da leoni"
+order = "table"
+strip = false
+table = { "Una notte da leoni" = 1, "Una notte da leoni 2" = 2, "Una notte da leoni 3" = 3 }
