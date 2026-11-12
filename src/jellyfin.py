@@ -42,7 +42,9 @@ class HttpJellyfinClient:
         if auth:
             if not self.api_key:
                 raise JellyfinError("MF_JELLYFIN_API_KEY is empty")
-            request.add_header("X-Emby-Token", self.api_key)
+            # 12.4 rejects `X-Emby-Token` with a 401; this scheme is what both
+            # 12.x and 10.x accept.
+            request.add_header("Authorization", f'MediaBrowser Token="{self.api_key}"')
         try:
             with urllib.request.urlopen(request, timeout=self.timeout_s) as response:
                 return response.read()
