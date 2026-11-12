@@ -4,23 +4,34 @@ Two shapes, both present on disk: a folder of ``<Folder> - <n>.mp4`` episodes
 with absolute numbering (One Piece starts at 700) and a single-file folder whose
 name carries ``Movie`` (Haikyu). Episode integers are never assumed contiguous:
 ``Inazuma Eleven (ITA) (2008)`` has 126 files and a hole before 127.
+
+A show listed in ``anime_seasons.json`` is laid out in its provider's seasons
+instead of one flat ``Season 01``; see :mod:`src.naming.seasons`.
 """
 
 from __future__ import annotations
 
+import logging
 import re
 from collections import defaultdict
+from pathlib import Path
 
 from src import naming
 from src.models import PlannedItem
 from src.naming import parse
+from src.naming import seasons as seasonmap
 from src.plugin_api import DetectContext, Detected, PlanContext, read_bool
 
 id = "animeunity"
 name = "animeunity (Italian dub)"
-version = "1"
+version = "2"
 priority = 10
 default_library = "anime"
+
+logger = logging.getLogger(__name__)
+
+#: The map is data, not config: it ships in the same directory as the plugin.
+SEASON_MAP = Path(__file__).with_name("anime_seasons.json")
 
 YEAR_TAIL = re.compile(r"\(\d{4}\)\s*$")
 NUMBERED = re.compile(r"^(?P<base>.+?)\s+-\s+(?P<num>\d{1,4})$")
@@ -84,9 +95,30 @@ def _item(source, layout: naming.Layout) -> PlannedItem:
     )
 
 
+def _place(show: seasonmap.ShowSeasons | None, number: int) -> tuple[int, int]:
+    """Season and episode for one absolute number; flat ``Season 01`` when unmapped."""
+    if show is None:
+        return 1, number
+    resolved = show.resolve(number)
+    if resolved is not None:
+        return resolved
+    logger.warning(
+        "%s: episode %d is past the season map, which covers 1-%d; keeping it in Season 01",
+        show.title,
+        number,
+        show.episode_count,
+    )
+    return 1, number
+
+
 def plan(ctx: PlanContext):
     sorttitle = read_bool(ctx.options, "MF_NFO_SORTTITLE", True)
     emit_nfo = read_bool(ctx.options, "MF_NFO_ENABLED", True)
+    map_entries = (
+        ()
+        if read_bool(ctx.options, "MF_ANIME_SINGLE_SEASON", False)
+        else seasonmap.load(SEASON_MAP)
+    )
     hints = re.compile(
         ctx.options.get("MF_ANIME_MOVIE_HINTS", r"\b(Movie|Film)\b"), re.IGNORECASE
     )
@@ -118,20 +150,25 @@ def plan(ctx: PlanContext):
             continue
 
         folder = naming.clone_folder(show_title, title_year.year)
-        show_nfo = (
-            naming.tvshow_spec(None, display_order="absolute", sorttitle=sorttitle)
-            if emit_nfo
-            else None
-        )
+        show = seasonmap.find(map_entries, show_title, title_year.year)
+        show_nfo = None
+        if emit_nfo:
+            show_nfo = naming.tvshow_spec(
+                None,
+                display_order=None if show is not None else "absolute",
+                sorttitle=sorttitle,
+                empty=show is not None,
+            )
         for media in files:
             number = parse.parse_absolute_episode(media.path.name, title_year.base)
             if number is None:
                 continue
+            season, episode = _place(show, number)
             layout = naming.episode_layout(
                 "anime",
                 folder,
-                1,
-                number,
+                season,
+                episode,
                 media.path.suffix.lower(),
                 None,
                 show_nfo=show_nfo,

@@ -86,7 +86,7 @@ def _root_line(outcome: RootOutcome) -> str:
     counts = outcome.result.counts if outcome.result else {}
     bits = ", ".join(
         f"{key} {counts[key]}"
-        for key in ("created", "repointed", "pruned", "nfo_written", "errors")
+        for key in ("created", "repointed", "adopted", "pruned", "nfo_written", "errors")
         if counts.get(key)
     )
     verdict = outcome.result.outcome if outcome.result else "planned"

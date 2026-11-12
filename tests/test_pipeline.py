@@ -6,11 +6,12 @@ import os
 from pathlib import Path
 
 from src import fsutil
+from src.config import load_settings
 from src.linker import Linker
 from src.pipeline import Pipeline, SyncReport
 from src.state import LinkRecord, SqliteStateStore
 
-from .conftest import Fixture, build_library, write
+from .conftest import Fixture, build_library, make_env, write
 
 SHOWS_MCU = Path("MCU 1.1 - Iron Man (2008)") / "MCU 1.1 - Iron Man (2008) 1080p.mkv"
 SHOWS_DIAVOLI = Path("Diavoli (2020)")
@@ -42,11 +43,15 @@ def test_first_sync_creates_hardlinks_and_nfos(pipeline, library: Fixture) -> No
     assert (shows / "Diavoli (2020)" / "Season 01" / "Diavoli (2020) - S01E02.mkv").is_file()
     assert not (shows / "Diavoli (2020)" / "tvshow.nfo").exists()
 
-    one_piece = anime / "One Piece (1999)" / "Season 01" / "One Piece (1999) - S01E701.mp4"
+    one_piece = anime / "One Piece (1999)" / "Season 17" / "One Piece (1999) - S17E701.mp4"
     assert one_piece.is_file()
-    assert (anime / "One Piece (1999)" / "tvshow.nfo").is_file()
-    episode_nfo = anime / "One Piece (1999)" / "Season 01" / "One Piece (1999) - S01E700.nfo"
+    show_nfo = (anime / "One Piece (1999)" / "tvshow.nfo").read_text(encoding="utf-8")
+    assert "<tvshow>" in show_nfo
+    assert "displayorder" not in show_nfo
+    episode_nfo = anime / "One Piece (1999)" / "Season 17" / "One Piece (1999) - S17E700.nfo"
     assert "<episode>700</episode>" in episode_nfo.read_text(encoding="utf-8")
+    inazuma_nfo = (anime / "Inazuma Eleven (2008)" / "tvshow.nfo").read_text(encoding="utf-8")
+    assert "<displayorder>absolute</displayorder>" in inazuma_nfo
     assert store.pending_count() == 0
     assert len(store.recent_runs(10)) == len(report.roots)
 
@@ -109,6 +114,77 @@ def test_replacing_a_source_file_repoints_the_hardlink(pipeline, library: Fixtur
     assert os.path.samefile(source, target)
     row = store.get_by_target(fsutil.normalise(target))
     assert row is not None and row.status == "done"
+
+
+def test_a_target_that_moves_is_pruned_once_and_keeps_its_row(tmp_path: Path) -> None:
+    """The flat→season flip moves every One Piece link in one run. The prune of
+    the old path must not delete the row the same run wrote for the new one."""
+    flat = build_library(tmp_path, MF_ANIME_SINGLE_SEASON="true")
+    store = SqliteStateStore(flat.state / "mediaforge.db")
+    Pipeline(flat.settings, store, Linker(), dry_run=False, plugins=flat.plugins).sync(
+        trigger="flat"
+    )
+    source = flat.anime / "One Piece (ITA) (1999)" / "One Piece (ITA) (1999) - 700.mp4"
+    old = (
+        flat.clone
+        / "Anime"
+        / "One Piece (1999)"
+        / "Season 01"
+        / "One Piece (1999) - S01E700.mp4"
+    )
+    assert old.is_file()
+
+    env = make_env(
+        flat.clone, flat.state, {"shows": flat.shows, "anime": flat.anime}
+    )
+    mapped = load_settings(tmp_path / "repo", environ=env)
+    report = Pipeline(mapped, store, Linker(), dry_run=False, plugins=flat.plugins).sync(
+        trigger="mapped"
+    )
+    assert report.ok
+
+    new = (
+        flat.clone
+        / "Anime"
+        / "One Piece (1999)"
+        / "Season 17"
+        / "One Piece (1999) - S17E700.mp4"
+    )
+    assert new.is_file()
+    assert not old.exists()
+    assert _outcome(report, "anime").plan.counts["pruned"] == 2
+
+    row = store.get_link(fsutil.normalise(source))
+    assert row is not None
+    assert row.target_path == fsutil.normalise(new)
+    store.close()
+
+
+def test_an_identical_unclaimed_target_is_adopted_not_rewritten(
+    pipeline, library: Fixture
+) -> None:
+    """A row can go missing while its file stays correct; the file must be claimed
+    back instead of being flagged as an orphan forever."""
+    pipe, store = pipeline
+    pipe.sync(trigger="first")
+    source = library.source("anime") / ANIME_INAZUMA / "Inazuma Eleven (ITA) (2008) - 001.mp4"
+    target = (
+        library.clone
+        / "Anime"
+        / "Inazuma Eleven (2008)"
+        / "Season 01"
+        / "Inazuma Eleven (2008) - S01E01.mp4"
+    )
+    before = os.stat(target)
+    store.delete_link(fsutil.normalise(source))
+
+    report = pipe.sync(trigger="adopt")
+    assert report.ok
+    after = os.stat(target)
+    assert (before.st_ino, before.st_mtime_ns) == (after.st_ino, after.st_mtime_ns)
+    row = store.get_link(fsutil.normalise(source))
+    assert row is not None and row.status == "done"
+    assert row.target_path == fsutil.normalise(target)
 
 
 def test_a_foreign_file_at_a_target_is_never_replaced(pipeline, library: Fixture) -> None:

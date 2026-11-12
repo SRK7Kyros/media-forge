@@ -146,13 +146,13 @@ def test_episode_layout_pins_season_and_episode_for_absolute_anime() -> None:
     show = episode_layout(
         "anime",
         "One Piece (1999)",
-        1,
+        17,
         700,
         ".mp4",
         None,
     )
     assert show.target.relative == PurePath(
-        "One Piece (1999)", "Season 01", "One Piece (1999) - S01E700.mp4"
+        "One Piece (1999)", "Season 17", "One Piece (1999) - S17E700.mp4"
     )
 
 

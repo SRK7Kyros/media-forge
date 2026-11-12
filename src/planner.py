@@ -89,6 +89,7 @@ class Planner:
 
         planned_targets: set[str] = set()
         planned_dirs: set[str] = set()
+        moved_from: set[str] = set()
         dirs_to_make: set[Path] = set()
         nfo_writes: dict[str, tuple[Path, str]] = {}
         rows_by_source = {fsutil.normalise(path): row for path, row in previous.items()}
@@ -122,14 +123,18 @@ class Planner:
                         self._link_detail(item, root_id),
                     )
                 )
-                report.counts["created" if kind == "LINK_CREATE" else "repointed"] = (
-                    report.counts.get("created" if kind == "LINK_CREATE" else "repointed", 0)
-                    + 1
-                )
+                counter = {
+                    "LINK_CREATE": "created",
+                    "LINK_REPOINT": "repointed",
+                    "LINK_ADOPT": "adopted",
+                }[kind]
+                report.counts[counter] = report.counts.get(counter, 0) + 1
 
             if row is not None and fsutil.normalise(row.target_path) != target_key:
-                ops.append(self._prune_op(Path(row.target_path), "target moved", row, report))
-                planned_dirs.add(fsutil.normalise(Path(row.target_path).parent))
+                moved_key = fsutil.normalise(row.target_path)
+                moved_from.add(moved_key)
+                ops.append(self._prune_op(Path(moved_key), "target moved", row, report))
+                planned_dirs.add(fsutil.normalise(Path(moved_key).parent))
 
             for relative, spec in item.nfos:
                 path = self.nfo_path(item, relative)
@@ -157,7 +162,9 @@ class Planner:
                     )
                 )
 
-        ops.extend(self._prune_ops(planned_targets, planned_dirs, rows_by_source, report))
+        ops.extend(
+            self._prune_ops(planned_targets, planned_dirs, rows_by_source, moved_from, report)
+        )
         ops.extend(
             Op("MKDIR", fsutil.normalise(path), None, ())
             for path in sorted(dirs_to_make, key=lambda p: (len(p.parts), str(p).lower()))
@@ -206,6 +213,10 @@ class Planner:
         if not fsutil.exists(target):
             return "LINK_CREATE", None
         if fsutil.same_file(item.source.path, target):
+            if row is None and fsutil.hardlink_count(target) > 1:
+                # st_nlink==1 means the source was *moved* here rather than linked,
+                # and adopting it would let a later prune delete its only copy.
+                return "LINK_ADOPT", None
             return None, None
         same_row = (
             row is not None and fsutil.normalise(row.target_path) == fsutil.normalise(target)
@@ -262,6 +273,7 @@ class Planner:
         planned_targets: set[str],
         planned_dirs: set[str],
         rows: Mapping[str, LinkRecord],
+        moved_from: set[str],
         report: PlanReport,
     ) -> list[Op]:
         ops: list[Op] = []
@@ -288,10 +300,14 @@ class Planner:
             target_key = fsutil.normalise(row.target_path)
             if target_key in planned_targets:
                 continue
-            reason = (
-                "source gone" if not fsutil.exists(row.source_path) else "not in plan"
-            )
-            ops.append(self._prune_op(Path(target_key), reason, row, report))
+            # A row whose target moved was already pruned (and counted) where the
+            # move was planned. Emitting it again here unlinks the same file twice
+            # and reports two prunes for one episode.
+            if target_key not in moved_from:
+                reason = (
+                    "source gone" if not fsutil.exists(row.source_path) else "not in plan"
+                )
+                ops.append(self._prune_op(Path(target_key), reason, row, report))
             prune_file(
                 Path(target_key).with_suffix(".nfo"), "episode pruned", row.library
             )

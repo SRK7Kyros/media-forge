@@ -227,7 +227,7 @@ def load_settings(repo: Path | None = None, environ: Mapping[str, str] | None = 
         nfo_enabled=_bool(env, "MF_NFO_ENABLED", True),
         nfo_sorttitle=_bool(env, "MF_NFO_SORTTITLE", True),
         nfo_set=_bool(env, "MF_NFO_SET", True),
-        anime_single_season=_bool(env, "MF_ANIME_SINGLE_SEASON", True),
+        anime_single_season=_bool(env, "MF_ANIME_SINGLE_SEASON", False),
         anime_movie_hints=re.compile(
             _get(env, "MF_ANIME_MOVIE_HINTS", r"\b(Movie|Film)\b"), re.IGNORECASE
         ),
@@ -300,10 +300,5 @@ def validate(settings: Settings) -> tuple[str, ...]:
         warnings.append(
             "MF_JELLYFIN_REFRESH is on but MF_JELLYFIN_API_KEY is empty: "
             "the clone tree will be maintained, Jellyfin will not be told to rescan."
-        )
-    if not settings.anime_single_season:
-        warnings.append(
-            "MF_ANIME_SINGLE_SEASON=false is not implemented; absolute numbering in "
-            "Season 01 is the only supported anime layout."
         )
     return tuple(warnings)

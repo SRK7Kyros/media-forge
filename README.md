@@ -11,7 +11,7 @@ D:\Shows\animeunity\One Piece (ITA) (1999)\One Piece (ITA) (1999) - 700.mp4
         ▼
 D:\Media\Jellyfin\
     Movies\Iron Man (2008)\Iron Man (2008).mkv + movie.nfo
-    Anime\One Piece (1999)\Season 01\One Piece (1999) - S01E700.mp4 + tvshow.nfo
+    Anime\One Piece (1999)\Season 17\One Piece (1999) - S17E700.mp4 + tvshow.nfo
 ```
 
 The library keeps the naming *you* chose; the clone gets the naming Jellyfin
@@ -46,8 +46,10 @@ MF_SOURCE_ANIME=D:\Shows\animeunity
 MF_JELLYFIN_API_KEY=            # empty = maintain the tree, never ask Jellyfin to rescan
 ```
 
-Sources are `MF_SOURCE_<ROOT_ID>`; any number of them exist, each is matched to a
+- Sources are `MF_SOURCE_<ROOT_ID>`; any number of them exist, each is matched to a
 plugin by content, not by name. `MF_PLUGIN_OVERRIDE_<ROOT_ID>=<plugin id>` pins one.
+`MF_ANIME_SINGLE_SEASON` and `plugins/anime_seasons.json` control the anime season
+layout (see *Anime season layout* below).
 
 The clone root **must share a volume with every source** — NTFS hardlinks cannot
 cross volumes — and the tool refuses to start otherwise rather than silently
@@ -70,6 +72,46 @@ falling back to a copy.
 4. **Reconcile**: directories, then links, then NFOs, then prunes. A row is
    committed *before* its syscall, so an interruption leaves a row without a
    file (recoverable) and never a file without a row (unprovable).
+
+## Anime season layout
+
+Absolute-numbered anime (`One Piece … - 700.mp4`) lands in one flat
+`Season 01` with `<displayorder>absolute</displayorder>`, so Jellyfin matches
+episode 700 against TMDB's absolute list. A show listed in
+`plugins/anime_seasons.json` instead gets **its provider's seasons**:
+
+```json
+{ "title": "One Piece", "year": 1999, "mode": "absolute",
+  "seasons": [[1, 61], [2, 16], …] }
+```
+
+`seasons` is `[season, episode_count]` in ascending order, specials excluded, and
+the counts are cumulative, so absolute 700 falls in the season that owns
+693–748. `mode: absolute` keeps the provider's global episode number in the file
+name (`S17E700`, which is how TMDB numbers One Piece inside season 17);
+`mode: per_season` restarts at 1 (`S02E16`).
+
+The map is a **snapshot of a metadata provider**, not a live lookup: the pipeline
+never reaches the network and a rerun must be deterministic. Add a show by
+copying its season list from TMDB and recording `provider` plus `fetched` — the
+schema rejects gaps, duplicates, season 0 and descending order. A show without
+an entry keeps the flat layout; `MF_ANIME_SINGLE_SEASON=true` forces the flat
+layout for every show.
+
+Mapped shows write a `tvshow.nfo` that **asserts no display order** (Jellyfin's
+default is TMDB's own seasons). That empty file matters: it displaces the
+`absolute` an earlier run wrote, and a leftover `tvshow.nfo` is never pruned
+while its folder still holds links.
+
+Jellyfin keeps the display order **per series, not per folder**, so a series
+first scanned under the flat layout keeps `absolute` however often it rescans;
+clear it once with `POST /Items/{id}` (`DisplayOrder: ""`, full DTO — see
+`AGENTS.md`). Season *names* ("Saga Di Dressrosa") are TMDb's `ImportSeasonName`
+setting, not something this tool writes. One order per series is also why the
+arc and the flat view cannot both exist in a single library: the seeded layout
+gives arc seasons *and* absolute episode numbers (`S17E700`), and a second,
+fully flat library over a second clone tree is the only way to also see one
+continuous season.
 
 ## Safety invariants
 

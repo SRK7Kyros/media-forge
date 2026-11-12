@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "note": "Season layout snapshots for absolute-numbered anime. Seasons are cumulative: [season, episode_count] in ascending order, specials (season 0) excluded, so the absolute number 700 falls in the season that owns the range 693-748. Season titles are not stored here - Jellyfin fetches them from the provider named in 'provider'.",
+  "shows": [
+    {
+      "title": "One Piece",
+      "year": 1999,
+      "provider": "tmdb:37854",
+      "fetched": "2026-11-12",
+      "mode": "absolute",
+      "seasons": [
+        [1, 61],
+        [2, 16],
+        [3, 14],
+        [4, 39],
+        [5, 13],
+        [6, 52],
+        [7, 33],
+        [8, 35],
+        [9, 73],
+        [10, 45],
+        [11, 26],
+        [12, 14],
+        [13, 101],
+        [14, 58],
+        [15, 62],
+        [16, 50],
+        [17, 56],
+        [18, 55],
+        [19, 74],
+        [20, 14],
+        [21, 197],
+        [22, 67],
+        [23, 25]
+      ]
+    }
+  ]
+}

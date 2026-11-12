@@ -118,8 +118,7 @@ class Reconciler:
 
         if op.kind == "FILE_PRUNE":
             self._unlink(Path(op.target_path))
-            if op.source_path:
-                self.store.delete_link(op.source_path)
+            self._forget_pruned(op)
             return "pruned"
 
         if op.kind == "DIR_PRUNE":
@@ -187,6 +186,22 @@ class Reconciler:
             path.unlink()
         except FileNotFoundError:
             return
+
+    def _forget_pruned(self, op: Op) -> None:
+        """Drop the row behind a pruned file, but only while it still names it.
+
+        Links reconcile before prunes, and a relocated item is both a write at its
+        new target and a prune of its old one under the *same* source key. Deleting
+        by key alone therefore discards the row the same run just wrote.
+        """
+        if not op.source_path:
+            return
+        row = self.store.get_link(op.source_path)
+        if row is None:
+            return
+        if fsutil.normalise(row.target_path) != fsutil.normalise(op.target_path):
+            return
+        self.store.delete_link(op.source_path)
 
     def _prune_empty(self, result: RunResult) -> None:
         """A second sweep, because a directory can empty out after its own DIR_PRUNE."""

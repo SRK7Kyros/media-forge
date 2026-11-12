@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import PurePath
 
 from ..models import Library, NfoSpec, TargetPath
-from . import franchise, parse, sanitize
+from . import franchise, parse, sanitize, seasons
 from .franchise import FranchiseMatch
 
 
@@ -53,14 +53,20 @@ def episode_spec(season: int, episode: int) -> NfoSpec:
 
 
 def tvshow_spec(
-    match: FranchiseMatch | None, *, display_order: str | None, sorttitle: bool
+    match: FranchiseMatch | None,
+    *,
+    display_order: str | None,
+    sorttitle: bool,
+    empty: bool = False,
 ) -> NfoSpec | None:
+    """``empty`` asks for a ``tvshow.nfo`` that asserts nothing, which is the
+    only way to displace a ``displayorder`` an earlier run wrote."""
     elements: list[tuple[str, str]] = []
     if match is not None and sorttitle:
         elements.append(("sorttitle", franchise.sort_title(match)))
     if display_order:
         elements.append(("displayorder", display_order))
-    if not elements:
+    if not elements and not empty:
         return None
     return NfoSpec(kind="tvshow", elements=tuple(elements))
 
@@ -133,5 +139,6 @@ __all__ = [
     "movie_layout",
     "parse",
     "sanitize",
+    "seasons",
     "tvshow_spec",
 ]
