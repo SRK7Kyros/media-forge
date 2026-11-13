@@ -77,6 +77,31 @@ def test_a_deleted_series_removes_its_folder_and_show_nfo(pipeline, library: Fix
     assert [row for row in store.iter_links() if "Inazuma" in row.target_path] == []
 
 
+def test_a_title_folder_that_still_holds_something_keeps_its_show_nfo(
+    pipeline, library: Fixture
+) -> None:
+    pipe, store = pipeline
+    pipe.sync(trigger="first")
+    source_dir = library.source("anime") / ANIME_INAZUMA
+    show_dir = library.clone / "Anime" / "Inazuma Eleven (2008)"
+    stray = show_dir / "notes.txt"
+    stray.write_text("not this tool's file", encoding="utf-8")
+
+    for path in source_dir.iterdir():
+        path.unlink()
+    source_dir.rmdir()
+
+    clock = Clock()
+    sweeper = _sweeper(library, store, clock)
+    sweeper.sweep()
+    clock.advance(library.settings.liveness_grace_s + 0.5)
+    result = sweeper.sweep()
+
+    assert result.pruned
+    assert stray.is_file()
+    assert (show_dir / "tvshow.nfo").is_file()
+
+
 def test_a_foreign_file_at_the_target_is_never_pruned(pipeline, library: Fixture) -> None:
     pipe, store = pipeline
     pipe.sync(trigger="first")

@@ -25,8 +25,6 @@ from .reconciler import prune_empty_library_dirs
 from .state import LinkRecord, SqliteStateStore
 
 FOLDER_NFOS = ("movie.nfo", "tvshow.nfo")
-#: Metadata extensions: a folder holding only these is empty, so it must not be kept alive.
-METADATA_EXTENSIONS = frozenset({".nfo"})
 
 
 @dataclass(slots=True)
@@ -109,18 +107,18 @@ class LivenessSweeper:
         """
         if not libraries:
             return
-        media = self.settings.managed_extensions - METADATA_EXTENSIONS
         for library in sorted(libraries):
             root = self.settings.clone_root / self.settings.library_dirs[library]
             if not root.is_dir():
                 continue
             keeps: set[str] = set()
             for dirpath, dirnames, filenames in os.walk(root, topdown=False):
-                has_media = any(Path(name).suffix.lower() in media for name in filenames)
+                # Any file that is not the folder's own NFO means the folder is not empty.
+                leftovers = any(name not in FOLDER_NFOS for name in filenames)
                 has_kept_child = any(
                     fsutil.normalise(Path(dirpath) / name) in keeps for name in dirnames
                 )
-                if has_media or has_kept_child:
+                if leftovers or has_kept_child:
                     keeps.add(fsutil.normalise(dirpath))
                     continue
                 for name in FOLDER_NFOS:
