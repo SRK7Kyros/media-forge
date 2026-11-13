@@ -411,6 +411,9 @@ class Planner:
                         if fsutil.is_symlink(path)
                         else "not a link this tool created"
                     )
+                    report.errors.append(
+                        f"{path}: {reason}; not pruning an entry this tool cannot claim"
+                    )
                     return Op(
                         "SKIP",
                         target_key,

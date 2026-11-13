@@ -78,16 +78,6 @@ def hardlink_count(path: Path | str) -> int:
     return os.stat(str(path)).st_nlink
 
 
-def lstat_inode(path: Path | str) -> tuple[int, int]:
-    """``(st_dev, st_ino)`` of the directory entry itself, not of its target.
-
-    For a symbolic link this is the link's own identity, which changes only when
-    someone replaces the link - the signal a prune safety check wants.
-    """
-    info = os.lstat(str(path))
-    return info.st_dev, info.st_ino
-
-
 def exists(path: Path | str) -> bool:
     """True for a real file *and* for a dangling symbolic link.
 
