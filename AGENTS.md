@@ -1,7 +1,8 @@
 # media-forge — agent context
 
-Maintains a Jellyfin-shaped **hardlink** clone tree beside an existing media
-library. It is the non-destructive replacement for
+Maintains a Jellyfin-shaped **clone tree** beside an existing media library. Every
+clone entry is a symbolic link, so deleting a source frees its bytes at once and
+the dangling entry is swept within seconds. It is the non-destructive replacement for
 `streaming-community`'s deleted `src/tools/migrate_jellyfin.py`, which restructured
 the source in place. **Never call, restore or re-implement that tool.**
 
@@ -12,8 +13,11 @@ the source in place. **Never call, restore or re-implement that tool.**
 - A target that the database does not claim is never replaced or pruned.
 - `plan` must always equal what `sync` then does. A new operation kind needs a
   planner branch, a reconciler branch, and a test that observes both.
-- Hardlinks only, same volume only. `src/config.py::validate` enforces it; a copy
-  is never an acceptable fallback (it doubles 670 GB of media).
+- `MF_LINK_MODE=symlink` is the default and the contract: a clone entry holds no
+  bytes, so a deleted source frees them immediately. `MF_LINK_MODE=hardlink` is
+  the pre-2026-11-13 behaviour and stays supported (same volume only,
+  `src/config.py::validate` enforces it). A copy is never an acceptable fallback
+  (it doubles 670 GB of media).
 
 ## Layout
 
@@ -24,6 +28,7 @@ the source in place. **Never call, restore or re-implement that tool.**
 | `src/registry.py` | confidence competition between plugins |
 | `src/planner.py` | diff → ordered `Op` list; owns every prune decision |
 | `src/reconciler.py` | executes `Op`s; journaled, row-before-syscall |
+| `src/liveness.py` | prunes entries whose source is gone, on its own clock |
 | `src/state.py` | SQLite: provenance, NFO hashes, run journal, lock |
 | `src/naming/seasons.py` | absolute episode numbers → a provider's season layout |
 | `plugins/*.py` | one module per source shape (`detect` + `plan`) |
@@ -77,11 +82,28 @@ the source in place. **Never call, restore or re-implement that tool.**
   and `_prune_ops` skips a target `build()` already pruned, so one move counts once
   (it reported `pruned 302` for 151 files before that).
 - **An identical but unclaimed target is adopted, not orphaned.** `_link_kind` returns
-  `LINK_ADOPT` when the target is already the source's inode, has no row and
-  `st_nlink > 1`. Without it `plan` is a no-op and an orphan can never be reclaimed —
-  a `verify`-red tree that no number of syncs repairs. The `> 1` is the safety line:
+  `LINK_ADOPT` when the target is already the link the tool would create (a symbolic
+  link naming the source, or a hard link of it) and has no row. Without it `plan` is
+  a no-op and an orphan can never be reclaimed - a `verify`-red tree that no number
+  of syncs repairs. The hard-link branch keeps the old `st_nlink > 1` safety line:
   `st_nlink == 1` means the source was *moved* into the clone, and adopting it would
   let a later prune delete its only copy.
+- **A symbolic link needs `SeCreateSymbolicLinkPrivilege`.** An elevated process or
+  Windows Developer Mode has it; a Medium-integrity shell has neither, and
+  `os.symlink` fails with WinError 1314. `mediaforge status` prints the mode and
+  `validate()` warns. Never run `sync` from a plain shell against a real clone root
+  in symlink mode: it would unlink a target and then fail to recreate it. The
+  `MediaForge` task runs elevated, so it is the only writer that matters.
+- **Legacy hard links are reclaimed through the recorded inode.** Rows written
+  before the symlink switch record the file inode, not a link target;
+  `fsutil.entry_owned_by` accepts either a link naming the source or a hard link
+  whose inode is the recorded one. Without that branch every orphan from the
+  hard-link era is refused as "not a link this tool created" and keeps its bytes.
+- **A symbolic link does not disappear when its target does.** It dangles, and
+  Jellyfin reports it as an error, so `src/liveness.py` sweeps rows whose source has
+  been missing for `MF_LIVENESS_GRACE_SECONDS` (default 2 s, checked every 1 s),
+  then removes the folder NFO and the now-empty directory. The grace window is what
+  keeps a downloader's delete-and-recreate from flapping the mirror.
 - **`repointed N` on nearly every shows run is `streaming-community` rewriting the
   source, not a link bug.** `refetch --resolution-only` replaces a file (new inode)
   and the clone keeps the old one until the next pass relinks it, so a steady trickle

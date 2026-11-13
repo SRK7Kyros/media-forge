@@ -1,13 +1,13 @@
 # media-forge
 
-Maintains a **Jellyfin-shaped hardlink clone tree** next to the media library you
+Maintains a **Jellyfin-shaped clone tree** next to the media library you
 already have, so Jellyfin can be pointed at a clean `Movies/ Shows/ Anime/` tree
 without a byte being copied, renamed or moved in the originals.
 
 ```
 D:\Shows\streaming-community\MCU 1.1 - Iron Man (2008)\...1080p.mkv
 D:\Shows\animeunity\One Piece (ITA) (1999)\One Piece (ITA) (1999) - 700.mp4
-        │  NTFS hardlink (same volume, same inode, zero bytes copied)
+        -> symbolic link (zero bytes; deleting the source frees it at once)
         ▼
 D:\Media\Jellyfin\
     Movies\Iron Man (2008)\Iron Man (2008).mkv + movie.nfo
@@ -15,8 +15,10 @@ D:\Media\Jellyfin\
 ```
 
 The library keeps the naming *you* chose; the clone gets the naming Jellyfin
-insists on. Both paths point at the same file, so deleting one never deletes the
-content, and nothing is duplicated on disk.
+insists on. Every clone entry is a symbolic link, so nothing is duplicated on
+disk and deleting a source frees its bytes immediately - the dangling entry is
+swept within seconds (`MF_LIVENESS_INTERVAL_SECONDS`), so the mirror only ever
+shows what the sources still have.
 
 ## Commands
 
@@ -51,9 +53,32 @@ plugin by content, not by name. `MF_PLUGIN_OVERRIDE_<ROOT_ID>=<plugin id>` pins 
 `MF_ANIME_SINGLE_SEASON` and `plugins/anime_seasons.json` control the anime season
 layout (see *Anime season layout* below).
 
-The clone root **must share a volume with every source** — NTFS hardlinks cannot
-cross volumes — and the tool refuses to start otherwise rather than silently
-falling back to a copy.
+Symbolic links cross volumes freely, so the clone root may live on another
+disk. `MF_LINK_MODE=hardlink` (the pre-2026-11-13 behaviour) still requires
+the clone root to share a volume with every source, and the tool refuses to
+start otherwise rather than silently falling back to a copy.
+
+## Link mode and liveness
+
+`MF_LINK_MODE` decides what a clone entry is:
+
+- `symlink` (default) - a symbolic link. It holds no bytes, so deleting a source
+  frees the space at once. What is left is a dangling link, which
+  `LivenessSweeper` removes once the source has been missing for
+  `MF_LIVENESS_GRACE_SECONDS` (checked every `MF_LIVENESS_INTERVAL_SECONDS`,
+  default 1 s), so a delete-and-recreate by a downloader does not flap the
+  mirror. A series folder that empties out loses its `tvshow.nfo` and its
+  directory in the same sweep.
+- `hardlink` - an NTFS hard link: same inode, no bytes copied either, but the
+  data stays on disk until every name is gone. Same volume only.
+
+Creating a symbolic link on Windows needs `SeCreateSymbolicLinkPrivilege`:
+either an elevated process (the `MediaForge` task runs with RunLevel Highest) or
+Windows Developer Mode. A Medium-integrity shell has neither - `mediaforge
+status` reports the mode, and `validate()` warns when it cannot be honoured.
+Switching an existing hard-link tree to `symlink` repoints each entry on the next
+sync (`LINK_REPOINT`); a legacy hard link whose source is already gone is
+reclaimed through its recorded inode rather than left behind.
 
 ## How it decides
 
@@ -119,7 +144,9 @@ continuous season.
   checks the clone against the database; `plan` shows every intended change.
 - A file at a target that the database does not claim is **refused**, not
   replaced: `refusing to replace` in the report.
-- Pruning requires the recorded inode (`MF_PRUNE_REQUIRE_KNOWN_INODE`), so a
+- Pruning requires proof of provenance (`MF_PRUNE_REQUIRE_KNOWN_INODE`): a
+  symbolic link must name its recorded source, and a hard link (including a
+  legacy one from the hard-link era) must still carry the recorded inode. A
   file that was swapped out is skipped rather than deleted.
 - `MF_DRY_RUN=true` makes every command read-only, including `watch`.
 - One instance at a time (a lock file in the state dir).
@@ -129,7 +156,7 @@ continuous season.
 ```
 plugins/            one module per source shape (detect + plan)
 src/                config, scan, registry, planner, reconciler, linker,
-                    state, nfo, verify, watcher, jellyfin client, cli
+                    liveness, state, nfo, verify, watcher, jellyfin client, cli
 service/            Start-MediaForge.ps1, Install-MediaForgeTask.ps1,
                     Uninstall-MediaForgeTask.ps1, Install-JellyfinService.ps1,
                     Install-AdminTask.ps1, admin-run.ps1
