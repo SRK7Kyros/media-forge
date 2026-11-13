@@ -2,7 +2,7 @@
 
 ``verify`` answers three questions, in this order of importance:
 
-1. Is every tracked item still a hard link of its source?
+1. Is every tracked item still a link of its source?
 2. Is there a file in the clone tree that this tool did not create?
 3. Is every piece of recorded metadata still on disk?
 
@@ -108,15 +108,12 @@ class Verifier:
             report.missing_target.append(row)
             healthy = False
         if fsutil.exists(source) and fsutil.exists(target):
-            if not fsutil.same_file(source, target):
-                report.not_linked.append(row)
-                healthy = False
-            elif fsutil.hardlink_count(target) <= 1:
+            if not self.linker.is_link_of(source, target):
                 report.not_linked.append(row)
                 healthy = False
             else:
                 try:
-                    _, inode = fsutil.inode_of(target)
+                    inode = self.linker.inode_of_target(target)[1]
                 except OSError:
                     inode = None
                 if inode is not None and inode != row.target_ino:
@@ -182,7 +179,7 @@ def summarise(report: VerifyReport, *, limit: int = 20) -> list[str]:
     buckets = (
         ("source missing", report.missing_source),
         ("target missing", report.missing_target),
-        ("target is not a hard link of its source", report.not_linked),
+        ("target is not a link of its source", report.not_linked),
         ("target inode changed", report.inode_changed),
         ("recorded NFO missing", report.missing_nfo),
     )

@@ -138,7 +138,7 @@ class Reconciler:
         source = Path(op.source_path)
         target = Path(op.target_path)
         detail = op.detail_dict()
-        self.linker.require_same_volume(source, self.settings.clone_root)
+        self.linker.require_linkable(source, self.settings.clone_root)
 
         if not self.dry_run:
             self.store.put_pending(self._record(source, target, detail))
@@ -146,10 +146,14 @@ class Reconciler:
         outcome = self.linker.ensure(source, target)
 
         if not self.dry_run:
-            info = os.stat(str(target))
+            inode = self.linker.inode_of_target(target)[1]
+            try:
+                size = os.stat(str(target)).st_size
+            except OSError:  # the source vanished between the link and the stat
+                size = 0
             digest = detail.get("nfo_sha256") or None
             self.store.confirm(
-                fsutil.normalise(source), info.st_ino, info.st_size, digest, int(self.clock())
+                fsutil.normalise(source), inode, size, digest, int(self.clock())
             )
         return outcome
 
@@ -204,15 +208,27 @@ class Reconciler:
         self.store.delete_link(op.source_path)
 
     def _prune_empty(self, result: RunResult) -> None:
-        """A second sweep, because a directory can empty out after its own DIR_PRUNE."""
-        for library in sorted(result.libraries):
-            root = self.settings.clone_root / self.settings.library_dirs[library]
-            if not root.is_dir():
+        prune_empty_library_dirs(self.settings, result.libraries)
+
+
+def prune_empty_library_dirs(settings: Settings, libraries: set[str]) -> list[Path]:
+    """Remove library directories that no longer hold anything.
+
+    A second sweep after the plan, because a directory can empty out only after
+    its own DIR_PRUNE has run. The liveness sweeper reuses it, so a prune outside
+    a sync run leaves no hollow ``Season 01`` folders behind either.
+    """
+    removed: list[Path] = []
+    for library in sorted(libraries):
+        root = settings.clone_root / settings.library_dirs[library]
+        if not root.is_dir():
+            continue
+        for dirpath, _dirnames, _filenames in os.walk(root, topdown=False):
+            if Path(dirpath) == root:
                 continue
-            for dirpath, _dirnames, _filenames in os.walk(root, topdown=False):
-                if Path(dirpath) == root:
-                    continue
-                try:
-                    os.rmdir(dirpath)
-                except OSError:
-                    continue
+            try:
+                os.rmdir(dirpath)
+            except OSError:
+                continue
+            removed.append(Path(dirpath))
+    return removed

@@ -16,8 +16,20 @@ CHUNK = 1024 * 1024
 
 
 def normalise(path: Path | str) -> str:
-    """Absolute Windows path with backslashes, used as a database key."""
-    return os.path.abspath(str(path)).replace("/", "\\")
+    """Absolute Windows path with backslashes, used as a database key.
+
+    ``os.readlink`` on Windows returns the target of a link this tool created as
+    a *verbatim* path (``\\\\?\\D:\\...``), and a verbatim path never compares
+    equal to the plain one even though both name the same file. The prefix is
+    stripped here rather than at every comparison, so a link target and a source
+    path are interchangeable keys.
+    """
+    text = str(path)
+    if text.startswith("\\\\?\\UNC\\"):
+        text = "\\\\" + text[len("\\\\?\\UNC\\") :]
+    elif text.startswith("\\\\?\\"):
+        text = text[len("\\\\?\\") :]
+    return os.path.abspath(text).replace("/", "\\")
 
 
 def relpath(base: Path, path: Path) -> PureWindowsPath:
@@ -66,8 +78,69 @@ def hardlink_count(path: Path | str) -> int:
     return os.stat(str(path)).st_nlink
 
 
+def lstat_inode(path: Path | str) -> tuple[int, int]:
+    """``(st_dev, st_ino)`` of the directory entry itself, not of its target.
+
+    For a symbolic link this is the link's own identity, which changes only when
+    someone replaces the link - the signal a prune safety check wants.
+    """
+    info = os.lstat(str(path))
+    return info.st_dev, info.st_ino
+
+
 def exists(path: Path | str) -> bool:
+    """True for a real file *and* for a dangling symbolic link.
+
+    ``os.path.lexists`` is deliberate: a link whose target was deleted still
+    occupies a name in the clone tree and must be prunable.
+    """
     return os.path.lexists(str(path))
+
+
+def is_symlink(path: Path | str) -> bool:
+    return os.path.islink(str(path))
+
+
+def link_target(path: Path | str) -> Path | None:
+    """The absolute path a symbolic link names, or None when it is not a link.
+
+    Reads the link itself, never the file behind it, so it still answers for a
+    dangling link whose source has been deleted.
+    """
+    try:
+        raw = os.readlink(str(path))
+    except OSError:
+        return None
+    base = os.path.dirname(os.path.abspath(str(path)))
+    return Path(os.path.abspath(os.path.join(base, raw)))
+
+
+def entry_owned_by(path: Path | str, source: Path | str, recorded_ino: int | None) -> bool:
+    """Whether ``path`` is an entry this tool created for ``source``.
+
+    Two shapes are legitimate:
+
+    * a symbolic link naming ``source`` exactly - the current mode;
+    * a *legacy* hard link whose inode is the one recorded when the row was
+      written. The tree was made of hard links before the switch to symbolic
+      links (2026-11-13) and a hard link keeps its inode, so that inode is
+      still proof the tool created it - and the only way an orphan from the
+      hard-link era can ever be reclaimed.
+
+    A symbolic link naming anywhere else is never ours; a plain file is ours
+    only when its inode matches what was recorded.
+    """
+    if not exists(path):
+        return False
+    target = link_target(path)
+    if target is not None:
+        return normalise(target) == normalise(source)
+    if recorded_ino is None:
+        return False
+    try:
+        return inode_of(path)[1] == recorded_ino
+    except OSError:
+        return False
 
 
 def is_file(path: Path | str) -> bool:
@@ -128,6 +201,31 @@ def atomic_write_bytes(path: Path, data: bytes) -> None:
 def unique_suffix() -> str:
     """Short random token for scratch names."""
     return uuid.uuid4().hex[:8]
+
+
+def symlink_supported(directory: Path | str | None = None) -> bool:
+    """Whether this *process* may create a symbolic link right now.
+
+    Windows grants ``SeCreateSymbolicLinkPrivilege`` to an elevated process, and
+    to every process when Developer Mode is on. A Medium-integrity shell has
+    neither, so the only honest probe is to try it once in a scratch directory.
+    """
+    base = Path(directory) if directory is not None else Path(tempfile.gettempdir())
+    token = unique_suffix()
+    source = base / f".mf-symlink-probe-{token}.tmp"
+    link = base / f".mf-symlink-probe-{token}.lnk"
+    try:
+        source.write_bytes(b"")
+        os.symlink(str(source), str(link))
+        return True
+    except OSError:
+        return False
+    finally:
+        for path in (link, source):
+            try:
+                os.unlink(str(path))
+            except OSError:
+                pass
 
 
 def make_dirs(path: Path) -> bool:

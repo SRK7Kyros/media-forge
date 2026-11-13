@@ -8,7 +8,9 @@ from src.linker import Linker
 from src.state import SqliteStateStore
 from src.verify import Verifier, summarise
 
-from .conftest import Fixture, write
+from .conftest import Fixture, requires_symlinks, write
+
+pytestmark = requires_symlinks
 
 
 def _verifier(library: Fixture, store: SqliteStateStore) -> Verifier:
@@ -33,7 +35,7 @@ def test_a_missing_target_is_reported(pipeline, library: Fixture) -> None:
     assert report.missing_target
 
 
-def test_a_copy_instead_of_a_hardlink_is_not_linked(pipeline, library: Fixture) -> None:
+def test_a_copy_instead_of_a_link_is_not_linked(pipeline, library: Fixture) -> None:
     pipe, store = pipeline
     pipe.sync(trigger="first")
     target = library.clone / "Movies" / "Iron Man (2008)" / "Iron Man (2008).mkv"

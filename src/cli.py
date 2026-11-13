@@ -14,6 +14,7 @@ import shutil
 import signal
 import sys
 import threading
+import time
 from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
@@ -24,6 +25,7 @@ from .config import LIBRARIES, ConfigError, Settings, load_settings, validate
 from .jellyfin import HttpJellyfinClient, JellyfinError
 from .jellyfin_refresh import Refresher
 from .linker import Linker
+from .liveness import LivenessSweeper
 from .logging_setup import configure
 from .pipeline import Pipeline, RootOutcome, SyncReport, inspect_sources, plugin_dir
 from .plugin_loader import load_plugins
@@ -193,7 +195,7 @@ def _run_sync(
         store.close()
         return EXIT_LOCKED
     try:
-        pipeline = Pipeline(settings, store, Linker(), dry_run=effective_dry_run)
+        pipeline = Pipeline(settings, store, Linker(settings.link_mode), dry_run=effective_dry_run)
         root_ids = tuple(args.source) if getattr(args, "source", None) else None
         report = pipeline.sync(root_ids=root_ids, trigger=trigger)
 
@@ -313,42 +315,63 @@ def _cmd_watch(args: argparse.Namespace) -> int:
         startup_grace_s=settings.startup_grace_s,
     )
     watcher.start()
-    pipeline = Pipeline(settings, store, Linker(), dry_run=dry_run, interrupt=stop)
+    linker = Linker(settings.link_mode)
+    pipeline = Pipeline(settings, store, linker, dry_run=dry_run, interrupt=stop)
+    sweeper = LivenessSweeper(settings, store, linker, dry_run=dry_run)
+    tick_s = settings.poll_interval_s
+    if settings.liveness_interval_s > 0:
+        tick_s = min(tick_s, settings.liveness_interval_s)
     logger.info(
-        "watching %d root(s) every %.0fs -> %s (settle %.0fs)",
+        "watching %d root(s) every %.0fs -> %s (settle %.0fs, %s links)",
         len(settings.sources),
         settings.poll_interval_s,
         settings.clone_root,
         settings.settle_s,
+        settings.link_mode,
     )
 
     try:
+        next_scan = 0.0
+        next_liveness = 0.0
         while not stop.is_set():
-            scans = {}
-            for source in settings.sources:
-                try:
-                    scans[source.root_id] = scanner.enumerate_root(source)
-                except ScanError as exc:
-                    logger.error("scan failed for %s: %s", source.root_id, exc)
-            signatures = {root_id: scan.signature for root_id, scan in scans.items()}
-            ready = watcher.poll(signatures)
-            if ready and not stop.is_set():
-                logger.info("reconciling %s", ", ".join(ready))
-                report = pipeline.sync(
-                    root_ids=tuple(ready), trigger="watch", scans=scans
-                )
-                for outcome in report.roots:
-                    if outcome.error:
-                        logger.error("%s: %s", outcome.root_id, _first_line(outcome.error))
-                    elif outcome.unchanged:
-                        logger.debug("%s: unchanged", outcome.root_id)
-                    else:
-                        logger.info("%s: %s", outcome.root_id, _root_line(outcome).strip())
-                    if outcome.result:
-                        for error in outcome.result.errors:
-                            logger.error("%s: %s", outcome.root_id, error)
+            if time.monotonic() >= next_scan:
+                next_scan = time.monotonic() + settings.poll_interval_s
+                scans = {}
+                for source in settings.sources:
+                    try:
+                        scans[source.root_id] = scanner.enumerate_root(source)
+                    except ScanError as exc:
+                        logger.error("scan failed for %s: %s", source.root_id, exc)
+                signatures = {root_id: scan.signature for root_id, scan in scans.items()}
+                ready = watcher.poll(signatures)
+                if ready and not stop.is_set():
+                    logger.info("reconciling %s", ", ".join(ready))
+                    report = pipeline.sync(
+                        root_ids=tuple(ready), trigger="watch", scans=scans
+                    )
+                    for outcome in report.roots:
+                        if outcome.error:
+                            logger.error("%s: %s", outcome.root_id, _first_line(outcome.error))
+                        elif outcome.unchanged:
+                            logger.debug("%s: unchanged", outcome.root_id)
+                        else:
+                            logger.info("%s: %s", outcome.root_id, _root_line(outcome).strip())
+                        if outcome.result:
+                            for error in outcome.result.errors:
+                                logger.error("%s: %s", outcome.root_id, error)
+            if (
+                settings.liveness_interval_s > 0
+                and not stop.is_set()
+                and time.monotonic() >= next_liveness
+            ):
+                next_liveness = time.monotonic() + settings.liveness_interval_s
+                swept = sweeper.sweep()
+                for path in swept.pruned:
+                    logger.info("pruned %s (source gone)", path)
+                for error in swept.errors:
+                    logger.warning("%s", error)
             refresher.tick()
-            stop.wait(settings.poll_interval_s)
+            stop.wait(tick_s)
     except KeyboardInterrupt:
         logger.info("interrupted")
     finally:
@@ -394,6 +417,11 @@ def _cmd_status(args: argparse.Namespace) -> int:
     for source in settings.sources:
         lines.append(f"source       {source.root_id:<8} {source.path}")
     lines.append(f"dry run      {settings.dry_run}")
+    lines.append(
+        f"links        {settings.link_mode} "
+        f"(liveness every {settings.liveness_interval_s:g}s, "
+        f"grace {settings.liveness_grace_s:g}s)"
+    )
     lines.append(
         f"jellyfin     {settings.jellyfin_url} "
         f"(refresh {'on' if settings.jellyfin_refresh else 'off'}, "
@@ -462,7 +490,7 @@ def _cmd_verify(args: argparse.Namespace) -> int:
     settings = _load(args)
     store = _open_store(settings)
     try:
-        report = Verifier(settings, store, Linker()).run(
+        report = Verifier(settings, store, Linker(settings.link_mode)).run(
             include_orphans=not args.no_orphans
         )
     finally:
@@ -639,7 +667,7 @@ def _map_libraries(settings: Settings, libraries: list) -> dict[str, str]:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="mediaforge",
-        description="Maintain a Jellyfin-shaped hardlink clone tree beside a media library.",
+        description="Maintain a Jellyfin-shaped clone tree beside a media library.",
     )
     parser.add_argument("--version", action="version", version=f"media-forge {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)

@@ -203,6 +203,15 @@ class Planner:
                 )
         return chosen, ops
 
+    def _links_source(self, target: Path, source: Path) -> bool:
+        """Whether ``target`` is already the link this tool would create."""
+        if self.settings.link_mode == "symlink":
+            if not fsutil.is_symlink(target):
+                return False
+            link = fsutil.link_target(target)
+            return link is not None and fsutil.normalise(link) == fsutil.normalise(source)
+        return fsutil.same_file(source, target) and fsutil.hardlink_count(target) > 1
+
     def _link_kind(
         self,
         item: PlannedItem,
@@ -212,15 +221,20 @@ class Planner:
     ) -> tuple[str | None, str | None]:
         if not fsutil.exists(target):
             return "LINK_CREATE", None
-        if fsutil.same_file(item.source.path, target):
-            if row is None and fsutil.hardlink_count(target) > 1:
-                # st_nlink==1 means the source was *moved* here rather than linked,
-                # and adopting it would let a later prune delete its only copy.
-                return "LINK_ADOPT", None
-            return None, None
+        if self._links_source(target, item.source.path):
+            # Already a link this tool can vouch for. An untracked one is adopted
+            # (a rebuilt database must not orphan a healthy tree); a tracked one
+            # needs no operation at all.
+            return ("LINK_ADOPT" if row is None else None), None
         same_row = (
             row is not None and fsutil.normalise(row.target_path) == fsutil.normalise(target)
         )
+        if fsutil.is_symlink(target) and not same_row:
+            return (
+                None,
+                f"{target} is a symbolic link this tool did not create; "
+                "refusing to replace it",
+            )
         if same_row:
             return "LINK_REPOINT", None
         try:
@@ -390,26 +404,40 @@ class Planner:
                 (("reason", "already absent"), ("library", row.library)),
             )
         if self.settings.prune_require_known_inode:
-            try:
-                _, ino = fsutil.inode_of(path)
-            except OSError as exc:
-                return Op(
-                    "SKIP",
-                    target_key,
-                    row.source_path,
-                    (("reason", str(exc)), ("library", row.library)),
-                )
-            if ino != row.target_ino:
-                report.errors.append(
-                    f"{path} inode changed since it was recorded (expected {row.target_ino}); "
-                    "not pruning a file whose provenance no longer matches"
-                )
-                return Op(
-                    "SKIP",
-                    target_key,
-                    row.source_path,
-                    (("reason", "inode changed"), ("library", row.library)),
-                )
+            if self.settings.link_mode == "symlink":
+                if not fsutil.entry_owned_by(path, row.source_path, row.target_ino):
+                    reason = (
+                        "link target changed"
+                        if fsutil.is_symlink(path)
+                        else "not a link this tool created"
+                    )
+                    return Op(
+                        "SKIP",
+                        target_key,
+                        row.source_path,
+                        (("reason", reason), ("library", row.library)),
+                    )
+            else:
+                try:
+                    _, ino = fsutil.inode_of(path)
+                except OSError as exc:
+                    return Op(
+                        "SKIP",
+                        target_key,
+                        row.source_path,
+                        (("reason", str(exc)), ("library", row.library)),
+                    )
+                if ino != row.target_ino:
+                    report.errors.append(
+                        f"{path} inode changed since it was recorded (expected {row.target_ino}); "
+                        "not pruning a file whose provenance no longer matches"
+                    )
+                    return Op(
+                        "SKIP",
+                        target_key,
+                        row.source_path,
+                        (("reason", "inode changed"), ("library", row.library)),
+                    )
         report.counts["pruned"] = report.counts.get("pruned", 0) + 1
         return Op(
             "FILE_PRUNE",

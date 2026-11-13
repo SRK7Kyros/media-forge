@@ -61,6 +61,9 @@ class Settings:
     dry_run: bool
     prune_enabled: bool
     prune_require_known_inode: bool
+    link_mode: str
+    liveness_interval_s: float
+    liveness_grace_s: float
     state_dir: Path
     log_dir: Path
     log_level: str
@@ -240,6 +243,9 @@ def load_settings(repo: Path | None = None, environ: Mapping[str, str] | None = 
         dry_run=_bool(env, "MF_DRY_RUN", False),
         prune_enabled=_bool(env, "MF_PRUNE_ENABLED", True),
         prune_require_known_inode=_bool(env, "MF_PRUNE_REQUIRE_KNOWN_INODE", True),
+        link_mode=_get(env, "MF_LINK_MODE", "symlink").strip().lower(),
+        liveness_interval_s=_float(env, "MF_LIVENESS_INTERVAL_SECONDS", 1.0),
+        liveness_grace_s=_float(env, "MF_LIVENESS_GRACE_SECONDS", 2.0),
         state_dir=state_dir,
         log_dir=log_dir,
         log_level=_get(env, "MF_LOG_LEVEL", "INFO").strip().upper(),
@@ -262,6 +268,14 @@ def validate(settings: Settings) -> tuple[str, ...]:
         raise ConfigError(f"MF_WATCH_MODE={settings.watch_mode!r}: only 'poll' or 'off' exist.")
     if settings.log_level not in {"DEBUG", "INFO", "WARNING", "ERROR"}:
         raise ConfigError(f"MF_LOG_LEVEL={settings.log_level!r} is not a log level.")
+    if settings.link_mode not in {"symlink", "hardlink"}:
+        raise ConfigError(
+            f"MF_LINK_MODE={settings.link_mode!r}: only 'symlink' or 'hardlink' exist."
+        )
+    if settings.liveness_interval_s < 0 or settings.liveness_grace_s < 0:
+        raise ConfigError(
+            "MF_LIVENESS_INTERVAL_SECONDS and MF_LIVENESS_GRACE_SECONDS must not be negative."
+        )
     if not settings.sources:
         raise ConfigError("No sources configured: set at least one MF_SOURCE_<ROOT_ID>.")
 
@@ -285,6 +299,8 @@ def validate(settings: Settings) -> tuple[str, ...]:
             raise ConfigError(
                 f"Source {src} and clone root {clone} overlap; they must be disjoint trees."
             )
+        if settings.link_mode != "hardlink":
+            continue  # symbolic links cross volumes freely
         clone_volume = fsutil.volume_of(clone)
         source_volume = fsutil.volume_of(src)
         if clone_volume is None or source_volume is None:
@@ -292,7 +308,7 @@ def validate(settings: Settings) -> tuple[str, ...]:
         if clone_volume != source_volume:
             raise ConfigError(
                 f"Clone root {clone} is on volume {fsutil.volume_name(clone)} but source {src} "
-                f"is on volume {fsutil.volume_name(src)}. NTFS hardlinks cannot cross volumes."
+                f"is on volume {fsutil.volume_name(src)}. NTFS hard links cannot cross volumes."
             )
 
     warnings: list[str] = []
@@ -300,5 +316,11 @@ def validate(settings: Settings) -> tuple[str, ...]:
         warnings.append(
             "MF_JELLYFIN_REFRESH is on but MF_JELLYFIN_API_KEY is empty: "
             "the clone tree will be maintained, Jellyfin will not be told to rescan."
+        )
+    if settings.link_mode == "symlink" and not fsutil.symlink_supported():
+        warnings.append(
+            "MF_LINK_MODE=symlink but this account cannot create symbolic links "
+            "(no SeCreateSymbolicLinkPrivilege, Developer Mode off): run elevated, or set "
+            "MF_LINK_MODE=hardlink."
         )
     return tuple(warnings)

@@ -11,7 +11,9 @@ from src.linker import Linker
 from src.pipeline import Pipeline, SyncReport
 from src.state import LinkRecord, SqliteStateStore
 
-from .conftest import Fixture, build_library, make_env, write
+from .conftest import Fixture, build_library, make_env, requires_symlinks, write
+
+pytestmark = requires_symlinks
 
 SHOWS_MCU = Path("MCU 1.1 - Iron Man (2008)") / "MCU 1.1 - Iron Man (2008) 1080p.mkv"
 SHOWS_DIAVOLI = Path("Diavoli (2020)")
@@ -22,7 +24,7 @@ def _outcome(report: SyncReport, root_id: str):
     return next(entry for entry in report.roots if entry.root_id == root_id)
 
 
-def test_first_sync_creates_hardlinks_and_nfos(pipeline, library: Fixture) -> None:
+def test_first_sync_creates_symlinks_and_nfos(pipeline, library: Fixture) -> None:
     pipe, store = pipeline
     report = pipe.sync(trigger="test")
     assert report.ok
@@ -33,6 +35,7 @@ def test_first_sync_creates_hardlinks_and_nfos(pipeline, library: Fixture) -> No
 
     iron_man = movies / "Iron Man (2008)" / "Iron Man (2008).mkv"
     assert iron_man.is_file()
+    assert os.path.islink(iron_man)
     assert os.path.samefile(iron_man, library.source("shows") / SHOWS_MCU)
     nfo = (movies / "Iron Man (2008)" / "movie.nfo").read_text(encoding="utf-8")
     assert "<sorttitle>MCU 01.01</sorttitle>" in nfo
@@ -101,7 +104,7 @@ def test_a_whole_deleted_title_removes_its_clone_directories(pipeline, library: 
     assert [row for row in store.iter_links() if "Inazuma" in row.target_path] == []
 
 
-def test_replacing_a_source_file_repoints_the_hardlink(pipeline, library: Fixture) -> None:
+def test_replacing_a_source_file_keeps_the_clone_pointing_at_it(pipeline, library: Fixture) -> None:
     pipe, store = pipeline
     pipe.sync(trigger="first")
     source = library.source("shows") / SHOWS_MCU
@@ -111,6 +114,7 @@ def test_replacing_a_source_file_repoints_the_hardlink(pipeline, library: Fixtur
 
     pipe.sync(trigger="repoint")
     assert target.read_bytes() == source.read_bytes()
+    assert os.path.islink(target)
     assert os.path.samefile(source, target)
     row = store.get_by_target(fsutil.normalise(target))
     assert row is not None and row.status == "done"
@@ -237,7 +241,9 @@ def test_prune_disabled_leaves_the_clone_alone(tmp_path: Path) -> None:
         )
         source.unlink()
         report = pipe.sync(trigger="prune")
-        assert target.exists()
+        # A kept entry is still a link, so it dangles once the source is gone:
+        # the check is that the entry itself survived, not that it resolves.
+        assert fsutil.exists(target)
         outcome = _outcome(report, "anime")
         skips = [op for op in outcome.plan.ops if op.kind == "SKIP"]
         assert any(op.detail_dict().get("reason") == "prune disabled" for op in skips)

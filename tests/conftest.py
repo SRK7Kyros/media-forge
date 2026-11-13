@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from src import fsutil
 from src.config import Settings, load_settings
 from src.linker import Linker
 from src.pipeline import Pipeline
@@ -15,6 +16,15 @@ from src.state import SqliteStateStore
 
 REPO = Path(__file__).resolve().parents[1]
 PLUGIN_DIR = REPO / "plugins"
+
+SYMLINKS_AVAILABLE = fsutil.symlink_supported()
+requires_symlinks = pytest.mark.skipif(
+    not SYMLINKS_AVAILABLE,
+    reason=(
+        "this account cannot create symbolic links (no SeCreateSymbolicLinkPrivilege, "
+        "Developer Mode off); run the suite from an elevated process"
+    ),
+)
 
 
 @pytest.fixture(autouse=True)
