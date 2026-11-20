@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import re
 from collections import defaultdict
+from collections.abc import Mapping
 from pathlib import Path
 
 from mediaforge import naming
@@ -30,8 +31,13 @@ default_library = "anime"
 
 logger = logging.getLogger(__name__)
 
-#: The map is data, not config: it ships in the same directory as the plugin.
+#: The map ships beside the plugin; ``MF_SEASON_MAP`` points at another file.
 SEASON_MAP = Path(__file__).with_name("anime_seasons.json")
+
+
+def _season_map_path(options: Mapping[str, str]) -> Path:
+    configured = options.get("MF_SEASON_MAP", "").strip()
+    return Path(configured).expanduser() if configured else SEASON_MAP
 
 YEAR_TAIL = re.compile(r"\(\d{4}\)\s*$")
 NUMBERED = re.compile(r"^(?P<base>.+?)\s+-\s+(?P<num>\d{1,4})$")
@@ -117,7 +123,7 @@ def plan(ctx: PlanContext):
     map_entries = (
         ()
         if read_bool(ctx.options, "MF_ANIME_SINGLE_SEASON", False)
-        else seasonmap.load(SEASON_MAP)
+        else seasonmap.load(_season_map_path(ctx.options))
     )
     hints = re.compile(
         ctx.options.get("MF_ANIME_MOVIE_HINTS", r"\b(Movie|Film)\b"), re.IGNORECASE

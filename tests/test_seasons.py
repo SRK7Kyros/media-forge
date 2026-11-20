@@ -168,3 +168,29 @@ def test_the_plugin_drops_the_absolute_display_order_only_for_mapped_shows() -> 
 def test_a_mapped_show_keeps_its_tvshow_nfo_when_sorttitle_is_off() -> None:
     mapped = _plan({"MF_NFO_SORTTITLE": "false"})[0]
     assert "tvshow.nfo" in {path.name for path, _ in mapped.nfos}
+
+
+def test_mf_season_map_points_the_plugin_at_another_file(tmp_path: Path) -> None:
+    """The shipped map is a snapshot beside the plugin, not a config file.
+
+    A user with a different provider layout (or a show the snapshot does not
+    know) must be able to supply the map without editing the installed package.
+    """
+    other = tmp_path / "seasons.json"
+    other.write_text(
+        '{"shows": [{"title": "One Piece", "year": 1999, "mode": "absolute",'
+        ' "seasons": [[1, 1], [2, 700]]}]}',
+        encoding="utf-8",
+    )
+
+    items = _plan({"MF_SEASON_MAP": str(other)})
+    assert items[0].target.relative == PurePath("One Piece (1999)") / PurePath(
+        "Season 02/One Piece (1999) - S02E700.mp4"
+    )
+
+    # A configured file that does not exist degrades to "map nothing" - the
+    # plugin is a planner, and refusing to run would strand a whole root.
+    flat = _plan({"MF_SEASON_MAP": str(tmp_path / "absent.json")})
+    assert flat[0].target.relative == PurePath("One Piece (1999)") / PurePath(
+        "Season 01/One Piece (1999) - S01E700.mp4"
+    )
