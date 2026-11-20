@@ -34,6 +34,45 @@ shows what the sources still have.
 A clone root on a different volume is fine in the default `symlink` mode;
 `MF_LINK_MODE=hardlink` additionally requires one volume shared with every source.
 
+## What it looks like
+
+Real output from the machine this was written on (three libraries, one root per
+source shape):
+
+```text
+$ mediaforge status
+media-forge 0.1.0
+clone root   D:\Media\Jellyfin
+source       anime    D:\Shows\animeunity
+source       shows    D:\Shows\streaming-community
+links        symlink (liveness every 1s, grace 2s)
+jellyfin     http://127.0.0.1:8096 (refresh on, key set)
+
+library      movies  done 66
+library      shows   done 551
+library      anime   done 492
+
+run #672  2026-11-20T14:03:11 watch  ok          no changes
+run #671  2026-11-20T14:02:33 liveness ok        pruned 1
+
+$ mediaforge plugins
+root anime (D:\Shows\animeunity)
+ * animeunity               0.85  90%+ of videos are .mp4; every sampled name is '<Folder> - <n>.mp4'
+   streaming_community      0.20  most folders end with (YYYY)
+   -> animeunity at 0.85 (floor 0.60)
+root shows (D:\Shows\streaming-community)
+ * streaming_community      1.00  95%+ of videos are .mkv; most folders end with (YYYY); JSON sidecar
+   -> streaming_community at 1.00 (floor 0.60)
+
+$ mediaforge verify
+tracked 1109, healthy 1109, clone files scanned 1670
+verdict: clean
+```
+
+`verify` is the honest one: it re-reads every link in the clone tree and asks the
+database to vouch for it. `plan` is the same question asked before writing
+anything, and `sync` prints the same rows after doing them.
+
 ## Commands
 
 | command | what it does |

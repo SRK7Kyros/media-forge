@@ -1,10 +1,10 @@
 """Signature polling.
 
-A kernel watcher is deliberately not used. ``D:\\Gerbera\\reindex-watch.ps1``
-exists because ``FileSystemWatcher`` silently missed a change on this host, and
-``ReadDirectoryChangesW`` drops events on burst overflow without an error — a
-failure mode that is indistinguishable from "nothing happened". A stat walk over
-~1700 entries costs milliseconds and cannot lie.
+A kernel watcher is deliberately not used. ``FileSystemWatcher`` has been
+observed silently missing changes, and ``ReadDirectoryChangesW`` drops events on
+burst overflow without an error - a failure mode that is indistinguishable from
+"nothing happened". A stat walk over ~1700 entries costs milliseconds and cannot
+lie.
 """
 
 from __future__ import annotations
