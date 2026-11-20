@@ -77,12 +77,23 @@ class Settings:
     raw: dict[str, str]
 
 
-def repo_root() -> Path:
-    """The source checkout that contains ``mediaforge/``."""
+def project_root() -> Path:
+    """The directory a ``.env`` is read from: ``MF_ROOT``, else the nearest parent
+    of the working directory that holds a ``pyproject.toml``, else the working
+    directory itself.
+
+    This used to be ``Path(__file__).parents[1]``, which is the checkout during
+    development and *site-packages* once installed - so an installed copy looked
+    for ``.env`` and ``plugins/`` next to the interpreter's library directory.
+    """
     override = os.environ.get("MF_ROOT")
     if override:
         return Path(os.path.abspath(override))
-    return Path(__file__).resolve().parents[1]
+    current = Path.cwd().resolve()
+    for candidate in (current, *current.parents):
+        if (candidate / "pyproject.toml").is_file():
+            return candidate
+    return current
 
 
 def expand(value: str) -> str:
@@ -161,6 +172,11 @@ def _float(env: Mapping[str, str], key: str, default: float) -> float:
 
 
 def _sources(env: Mapping[str, str]) -> tuple[SourceRoot, ...]:
+    """Every ``MF_SOURCE_<ID>=<path>`` that has a value. Nothing else.
+
+    There are no invented defaults: a root the user did not configure does not
+    exist, and :func:`validate` refuses to start instead of guessing a path.
+    """
     found: list[SourceRoot] = []
     for key in sorted(env):
         if not key.startswith(SOURCE_PREFIX):
@@ -169,14 +185,6 @@ def _sources(env: Mapping[str, str]) -> tuple[SourceRoot, ...]:
         value = expand(env[key]).strip()
         if root_id and value:
             found.append(SourceRoot(root_id, Path(os.path.abspath(value))))
-    if not found:
-        for root_id, default in (
-            ("shows", r"D:\Shows\streaming-community"),
-            ("anime", r"D:\Shows\animeunity"),
-        ):
-            value = _get(env, SOURCE_PREFIX + root_id.upper(), default)
-            if value.strip():
-                found.append(SourceRoot(root_id, Path(os.path.abspath(value.strip()))))
     return tuple(found)
 
 
@@ -192,14 +200,39 @@ def _overrides(env: Mapping[str, str]) -> dict[str, str]:
 
 
 def _state_dir(env: Mapping[str, str]) -> Path:
-    default = str(Path(os.environ.get("ProgramData", r"C:\ProgramData")) / "media-forge")
+    default = os.environ.get("MF_STATE_DIR") or _default_state_dir()
     return Path(os.path.abspath(_get(env, "MF_STATE_DIR", default)))
+
+
+def _default_state_dir() -> str:
+    """Per-platform data directory, so the default is never a path that only
+    exists on one OS.
+
+    String arithmetic on purpose: ``pathlib.Path`` picks its flavour from
+    ``os.name`` at call time, so this stays testable for both platforms.
+    """
+    if os.name == "nt":
+        base = os.environ.get("ProgramData") or os.path.join(
+            os.path.expanduser("~"), "AppData", "Local"
+        )
+        return os.path.join(base, "media-forge")
+    xdg = os.environ.get("XDG_STATE_HOME")
+    root = xdg if xdg else os.path.join(os.path.expanduser("~"), ".local", "state")
+    return os.path.join(root, "media-forge")
 
 
 def load_settings(repo: Path | None = None, environ: Mapping[str, str] | None = None) -> Settings:
     """Build the settings object. Never touches the filesystem except for stat."""
-    base = Path(os.path.abspath(repo)) if repo else repo_root()
+    base = Path(os.path.abspath(repo)) if repo else project_root()
     env = merged_env(base, environ)
+
+    clone_root = _get(env, "MF_CLONE_ROOT", "").strip()
+    if not clone_root:
+        raise ConfigError(
+            "MF_CLONE_ROOT is not set. It is the directory the clone tree is written "
+            "into and there is deliberately no default: point it at a Jellyfin library "
+            "directory that is empty or disposable."
+        )
 
     state_dir = _state_dir(env)
     log_dir = Path(os.path.abspath(_get(env, "MF_LOG_DIR", str(state_dir / "logs"))))
@@ -209,7 +242,7 @@ def load_settings(repo: Path | None = None, environ: Mapping[str, str] | None = 
 
     return Settings(
         repo_root=base,
-        clone_root=Path(os.path.abspath(_get(env, "MF_CLONE_ROOT", r"D:\Media\Jellyfin"))),
+        clone_root=Path(os.path.abspath(clone_root)),
         library_dirs={
             "movies": _get(env, "MF_LIBRARY_MOVIES", DEFAULT_LIBRARY_NAMES["movies"]),
             "shows": _get(env, "MF_LIBRARY_SHOWS", DEFAULT_LIBRARY_NAMES["shows"]),
