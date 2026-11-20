@@ -53,6 +53,17 @@ the source in place. **Never call, restore or re-implement that tool.**
 - Running `sync`/`watch` while another instance runs returns exit code 4 — that is
   the lock, not a bug.
 
+## Publishing
+
+- The tracked tree carries no secrets. `.env` is gitignored and is the only file
+  holding the Jellyfin key and library ids, so it never enters a commit.
+- `example.env` is the public file and is a contract, because `init` copies it:
+  every `MF_*` key the code reads must be documented there, and no
+  `MF_SOURCE_*` may be enabled by default. `tests/test_example_env.py` enforces
+  both, and both of its assertions fail on the pre-fix file.
+- CI runs on `windows-latest` on purpose: the suite builds a real NTFS tree with
+  symbolic links, so a Linux runner would prove nothing about the contract.
+
 ## Traps measured on this host (do not re-learn them)
 
 - **Jellyfin's `DisplayOrder` is sticky and an NFO cannot clear it.**
