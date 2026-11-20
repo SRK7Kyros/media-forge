@@ -20,6 +20,20 @@ disk and deleting a source frees its bytes immediately - the dangling entry is
 swept within seconds (`MF_LIVENESS_INTERVAL_SECONDS`), so the mirror only ever
 shows what the sources still have.
 
+## Requirements
+
+- **Windows 10/11** (NTFS). The clone is built from symbolic links, and the
+  pruning proof reads NTFS link targets and inodes.
+- **Python 3.11+** and [uv](https://docs.astral.sh/uv/). No runtime dependencies.
+- `SeCreateSymbolicLinkPrivilege` for the process that writes the clone tree:
+  an elevated shell, Windows Developer Mode, or the scheduled task below.
+  `mediaforge status` reports whether the current process has it.
+- A media library laid out with a `Title (Year)` folder per movie and per show.
+  Nothing is moved or renamed in it - that is the point.
+
+A clone root on a different volume is fine in the default `symlink` mode;
+`MF_LINK_MODE=hardlink` additionally requires one volume shared with every source.
+
 ## Commands
 
 | command | what it does |
@@ -230,7 +244,11 @@ Then `mediaforge jellyfin-check` prints the three library ids; put them in `.env
 as `MF_JELLYFIN_LIB_MOVIES/SHOWS/ANIME` together with `MF_JELLYFIN_API_KEY`
 (`POST /Auth/Keys?App=media-forge`). The refresh path is debounced (60 s), waits
 for Jellyfin to report idle, and leaves the markers in place if the call fails.
-Host-level detail, library options and the firewall rules: `~/.config/opencode/docs/jellyfin.md`.
+
+None of this is required: with an empty `MF_JELLYFIN_API_KEY` the tool maintains
+the clone tree and never contacts Jellyfin at all. Point Jellyfin at the clone
+root, turn off its own metadata savers (this tool owns the NFOs), and set its
+local metadata reader to NFO so a `tvshow.nfo` it did not write is not ignored.
 
 ## Tests
 
@@ -238,3 +256,11 @@ Host-level detail, library options and the firewall rules: `~/.config/opencode/d
 .venv\Scripts\python.exe -m pytest -q
 .venv\Scripts\ruff.exe check src plugins tests
 ```
+
+The suite builds a real two-root library in a temporary directory and drives a
+full reconcile against it, so it needs the symbolic-link privilege described
+above. A test that cannot run without it is skipped, never silently passed.
+
+## License
+
+MIT - see [`LICENSE`](LICENSE).

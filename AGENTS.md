@@ -131,6 +131,7 @@ the source in place. **Never call, restore or re-implement that tool.**
   ACE makes every user-side write fail with `attempt to write a readonly database`
   (`SQLITE_READONLY`, 8 — distinct from `CANTLOCK`, 1032). Grant
   `DESKTOP-1EHVJ82\Giulio:(OI)(CI)M` on the state dir and keep the task as the user.
+  (Substitute the machine and account that own the state dir for that pair.)
 - **nssm passes `AppParameters` through the Win32 parser unquoted**, so an argument
   value with a space truncates at it. `Install-JellyfinService.ps1` passes only
   space-free paths and relies on `AppDirectory` for the rest.

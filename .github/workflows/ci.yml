@@ -1,0 +1,31 @@
+name: ci
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    # windows-latest: the suite builds a real NTFS tree with symbolic links,
+    # which is the contract this tool is written against.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: install
+        run: |
+          uv venv .venv --python 3.11
+          uv pip install --python .venv\Scripts\python.exe -e ".[dev]"
+
+      - name: lint
+        run: .venv\Scripts\python.exe -m ruff check src plugins tests
+
+      - name: test
+        run: .venv\Scripts\python.exe -m pytest -q

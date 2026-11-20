@@ -28,7 +28,7 @@ build-backend = "hatchling.build"
 packages = ["src"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src/**", "plugins/**", "example.env", "service/**", "docs/**"]
+include = ["src/**", "plugins/**", "example.env", "service/**", "tests/**", "LICENSE", "README.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
