@@ -28,6 +28,9 @@ the source in place. **Never call, restore or re-implement that tool.**
 | `mediaforge/registry.py` | confidence competition between plugins |
 | `mediaforge/planner.py` | diff → ordered `Op` list; owns every prune decision |
 | `mediaforge/reconciler.py` | executes `Op`s; journaled, row-before-syscall |
+| `mediaforge/events.py` | OS events as *hints* (watchdog); a share root is polled instead |
+| `mediaforge/watcher.py` | the arm/settle/min-gap gate: an event or a signature arms a root |
+| `mediaforge/daemon.py` | the loop: decides *when*, spawns `mediaforge sync`/`sweep` children |
 | `mediaforge/liveness.py` | prunes entries whose source is gone, on its own clock |
 | `mediaforge/state.py` | SQLite: provenance, NFO hashes, run journal, lock |
 | `mediaforge/naming/seasons.py` | absolute episode numbers → a provider's season layout |
@@ -49,9 +52,14 @@ the source in place. **Never call, restore or re-implement that tool.**
   `D:\Shows\animeunity` (absolute-numbered anime; One Piece is mapped to its TMDB
   arc seasons, the other shows stay flat). Clone root: `D:\Media\Jellyfin`.
 - State/logs: `C:\ProgramData\media-forge`. Scheduled task name: `MediaForge`
-  (runs as **the user**, S4U, at startup + every 5 min).
-- Running `sync`/`watch` while another instance runs returns exit code 4 — that is
-  the lock, not a bug.
+  (runs as **the user**, S4U, at startup + every 5 min). `.venv` carries the one
+  runtime dependency, `watchdog>=4`; the daemon spawns its children with
+  `sys.executable`, so the launcher's `.venv\Scripts\python.exe` is the interpreter
+  that matters.
+- Running `sync` (or `sweep`) while another writer runs returns exit code 4 — that is
+  the lock, not a bug. `daemon` is the designed exception: it holds no lock, spawns
+  writers as children, and treats a child's 4 as "someone else is writing" and
+  retries after its backoff.
 
 ## Publishing
 
@@ -112,9 +120,11 @@ the source in place. **Never call, restore or re-implement that tool.**
   hard-link era is refused as "not a link this tool created" and keeps its bytes.
 - **A symbolic link does not disappear when its target does.** It dangles, and
   Jellyfin reports it as an error, so `mediaforge/liveness.py` sweeps rows whose source has
-  been missing for `MF_LIVENESS_GRACE_SECONDS` (default 2 s, checked every 1 s),
-  then removes the folder NFO and the now-empty directory. The grace window is what
-  keeps a downloader's delete-and-recreate from flapping the mirror.
+  been missing for `MF_LIVENESS_GRACE_SECONDS` (default 2 s). A delete event
+  schedules that sweep a window later and an idle sweep runs every
+  `MF_LIVENESS_INTERVAL_SECONDS` (default 30 s, `0` disables it) for anything the
+  events missed, then removes the folder NFO and the now-empty directory. The grace
+  window is what keeps a downloader's delete-and-recreate from flapping the mirror.
 - **The chain must not depend on the database remembering the entry.** The row
   sweep answers "does this row's source still exist"; a second pass walks the clone
   tree every `MF_ORPHAN_SCAN_INTERVAL_SECONDS` (default 60 s) and removes a
@@ -132,11 +142,39 @@ the source in place. **Never call, restore or re-implement that tool.**
   source, not a link bug.** `refetch --resolution-only` replaces a file (new inode)
   and the clone keeps the old one until the next pass relinks it, so a steady trickle
   is expected while that process runs.
+- **An event is a hint, never a statement, and silence is never evidence.**
+  `mediaforge/events.py` only says "look at this root"; the reconcile that follows
+  re-walks the root and diffs the `stat` signature, which is the truth. Three rules
+  follow, all of them measured behaviour of the backends: a queue deeper than
+  `OVERFLOW_THRESHOLD` (10 000) is *dropped* and answered with a full pass plus a
+  sweep, because replaying a stale burst is worse than rescanning - and `watchdog`
+  never surfaces `ERROR_NOTIFY_ENUM_DIR`/`IN_Q_OVERFLOW`, so the depth is the only
+  overflow witness; a root on a share (`is_network_path`: UNC, `DRIVE_REMOTE`, or a
+  POSIX mount whose fstype is in `NETWORK_FS`) is **polled** on
+  `MF_POLL_INTERVAL_SECONDS`, never watched; and the 6 h full pass and the idle
+  sweep exist because both inputs can be silent. `MF_WATCH_MODE=poll` disables
+  events everywhere, and is what the daemon falls back to when `watchdog` is
+  missing - correct, just later.
+- **A delete only *schedules* a sweep, one grace window later.** The event is not
+  the pruning decision: reacting to it directly would flap the mirror every time a
+  downloader replaces a file (remove, then re-add seconds later). The daemon fires
+  `sweep --grace 0` when the window has passed, and the child's own grace is
+  bypassed on purpose so the window is applied once, in one place.
 - **Never pipe a native child's stderr into a pipeline with
   `$ErrorActionPreference='Stop'`.** `& python ... 2>&1 | ForEach-Object` turns
   each stderr line into an ErrorRecord, the first throws, the pipe closes and the
-  child dies: a 30 s crash loop whose only trace is a repeating "watching N root(s)"
-  line. `service\Start-MediaForge.ps1` redirects to `logs\watch.out|err` instead.
+  child dies: a 30 s crash loop whose only trace is a repeating `daemon: N root(s)`
+  line. `service\Start-MediaForge.ps1` redirects to `logs\daemon.out|err` instead.
+- **The supervisor survives a branch switch, so a rename breaks it silently.** The
+  python child is started once and keeps running against the tree it started in:
+  renaming the package (`src/` → `mediaforge/`, 2026-11-20) left a `-m src` watcher
+  alive, holding the DB lock, importing the old module, until its next reconcile died
+  with `FileNotFoundError: ...\src\naming\franchise_rules.toml`. `plan()` failing means
+  no op ran, so nothing was pruned — the mirror simply stopped tracking. The launcher
+  re-reads the layout on every task start, so the repair is `Stop-ScheduledTask
+  MediaForge`, kill the leftover `-m src` pair, `Start-ScheduledTask MediaForge`. Proof
+  it is healthy: a fresh `daemon: N root(s) via watchdog` line, both roots' `last scan`
+  moved, and `mediaforge status` naming the newest run with trigger `daemon`.
 - **Task identity and the SQLite sidecars must match.** `mediaforge.db-wal/-shm`
   are created by whoever writes first; a SYSTEM-owned sidecar without the user's
   ACE makes every user-side write fail with `attempt to write a readonly database`

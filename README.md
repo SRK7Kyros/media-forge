@@ -24,7 +24,10 @@ shows what the sources still have.
 
 - **Windows 10/11** (NTFS). The clone is built from symbolic links, and the
   pruning proof reads NTFS link targets and inodes.
-- **Python 3.11+** and [uv](https://docs.astral.sh/uv/). No runtime dependencies.
+- **Python 3.11+** and [uv](https://docs.astral.sh/uv/). One runtime dependency,
+  [`watchdog`](https://pypi.org/project/watchdog/) — the OS event backend
+  (`ReadDirectoryChangesW` on Windows, inotify/FSEvents/kqueue elsewhere). If it is
+  ever missing the daemon polls instead, so the tree stays correct, just later.
 - `SeCreateSymbolicLinkPrivilege` for the process that writes the clone tree:
   an elevated shell, Windows Developer Mode, or the scheduled task below.
   `mediaforge status` reports whether the current process has it.
@@ -45,14 +48,15 @@ media-forge 0.1.0
 clone root   D:\Media\Jellyfin
 source       anime    D:\Shows\animeunity
 source       shows    D:\Shows\streaming-community
-links        symlink (liveness every 1s, grace 2s)
+links        symlink (sweep every 30s, grace 2s)
+watch        events (settle 20s, poll 15s)
 jellyfin     http://127.0.0.1:8096 (refresh on, key set)
 
 library      movies  done 66
 library      shows   done 551
 library      anime   done 492
 
-run #672  2026-11-20T14:03:11 watch  ok          no changes
+run #672  2026-11-20T14:03:11 daemon ok          no changes
 run #671  2026-11-20T14:02:33 liveness ok        pruned 1
 
 $ mediaforge plugins
@@ -85,8 +89,9 @@ nothing says `unchanged` and touches neither the disk nor the database.
 | `mediaforge init` | create the clone tree, state dir and a `.env` from `example.env` |
 | `mediaforge plugins` | show every plugin and the score it gives each source root |
 | `mediaforge plan` | print the entire diff — writes nothing |
-| `mediaforge sync` | reconcile once (`--dry-run`, `--apply`) |
-| `mediaforge watch` | poll the sources and reconcile as they change |
+| `mediaforge sync` | reconcile once (`--dry-run`, `--apply`, `--full` also sweeps) |
+| `mediaforge sweep` | remove dangling entries once (`--grace`, `--dry-run`) |
+| `mediaforge daemon` | run sync/sweep on a clock, from filesystem events (`watch` is the old name) |
 | `mediaforge status` | state, libraries, last run |
 | `mediaforge verify` | prove the clone tree matches the database |
 | `mediaforge jellyfin-check` | read Jellyfin's library ids into `.env` |
@@ -109,7 +114,8 @@ MF_JELLYFIN_API_KEY=            # empty = maintain the tree, never ask Jellyfin 
 - Sources are `MF_SOURCE_<ROOT_ID>`; any number of them exist, each is matched to a
 plugin by content, not by name. `MF_PLUGIN_OVERRIDE_<ROOT_ID>=<plugin id>` pins one.
 `MF_ANIME_SINGLE_SEASON` and `plugins/anime_seasons.json` control the anime season
-layout (see *Anime season layout* below).
+layout (see *Anime season layout* below); `MF_SEASON_MAP` points the plugin at a
+different map file when the shipped one is not yours to edit.
 
 Symbolic links cross volumes freely, so the clone root may live on another
 disk. `MF_LINK_MODE=hardlink` (the pre-2026-11-13 behaviour) still requires
@@ -123,21 +129,22 @@ start otherwise rather than silently falling back to a copy.
 - `symlink` (default) - a symbolic link. It holds no bytes, so deleting a source
   frees the space at once. What is left is a dangling link, which
   `LivenessSweeper` removes once the source has been missing for
-  `MF_LIVENESS_GRACE_SECONDS` (checked every `MF_LIVENESS_INTERVAL_SECONDS`,
-  default 1 s), so a delete-and-recreate by a downloader does not flap the
-  mirror. A series folder that empties out loses its `tvshow.nfo` and its
-  directory in the same sweep. A second, slower pass walks the clone tree every
-  `MF_ORPHAN_SCAN_INTERVAL_SECONDS` (default 60 s, `0` disables it) and removes
-  dangling links no database row explains - a restored state database, a run
-  killed between the link and its row - and clears a folder NFO left in a title
-  folder that holds nothing else.
+  `MF_LIVENESS_GRACE_SECONDS`. A delete event schedules that sweep a grace window
+  later, so a downloader's delete-and-recreate does not flap the mirror; the idle
+  sweep runs every `MF_LIVENESS_INTERVAL_SECONDS` (default 30 s, `0` disables it)
+  for anything the events missed. A series folder that empties out loses its
+  `tvshow.nfo` and its directory in the same sweep. A second, slower pass walks
+  the clone tree every `MF_ORPHAN_SCAN_INTERVAL_SECONDS` (default 60 s, `0`
+  disables it) and removes dangling links no database row explains - a restored
+  state database, a run killed between the link and its row - and clears a folder
+  NFO left in a title folder that holds nothing else.
 - `hardlink` - an NTFS hard link: same inode, no bytes copied either, but the
   data stays on disk until every name is gone. Same volume only.
 
 Pruning is suspended for any source root whose path cannot be read when the
 sweep runs: an unplugged drive, a renamed folder or a dropped share makes every
 file under it read as deleted, and that reading must never be acted on. The
-watch log says `pruning paused for <root>` once, and `pruning resumed` when it
+daemon log says `pruning paused for <root>` once, and `pruning resumed` when it
 comes back; nothing under that root is removed in between.
 
 Creating a symbolic link on Windows needs `SeCreateSymbolicLinkPrivilege`:
@@ -165,6 +172,31 @@ reclaimed through its recorded inode rather than left behind.
 4. **Reconcile**: directories, then links, then NFOs, then prunes. A row is
    committed *before* its syscall, so an interruption leaves a row without a
    file (recoverable) and never a file without a row (unprovable).
+
+## When it runs
+
+`sync` is the truth and `daemon` only decides *when* to run it. The two never share
+a process: every action is a `mediaforge sync`/`sweep` child, so a plugin that dies
+kills one child instead of the supervisor, and every log line names a command you
+can run by hand.
+
+1. **Events arm a root** (`watchdog`, the OS backend). A create, modify or move
+   under a source means "look at this root soon" — never "this is what changed".
+2. **The `stat` signature is the truth.** The reconcile that follows walks the root
+   and diffs it against the database, whatever the events claimed.
+3. **Settle and gap.** A root that keeps changing re-arms, so a file still being
+   written is not reconciled mid-download (`MF_SETTLE_SECONDS`, default 20 s); two
+   runs of one root are never closer than `MF_MIN_GAP_SECONDS` (30 s).
+4. **Everything an event cannot answer degrades to a scan**: an overflowed queue, a
+   root on a share that emits nothing (it is polled on `MF_POLL_INTERVAL_SECONDS`),
+   a full pass every `MF_SCAN_FULL_INTERVAL_SECONDS` (6 h), and an idle sweep. An
+   event's absence is never read as "nothing changed".
+5. `MF_WATCH_MODE=poll` disables events everywhere (a debugger, an unsupported
+   filesystem); `off` makes `daemon` refuse to start. A delete only *schedules* the
+   sweep one grace window later - the event is not the pruning decision.
+
+Startup is a full pass by design: a restart must reconcile whatever changed while
+the daemon was down, without waiting for an event that will never arrive.
 
 ## Anime season layout
 
@@ -216,15 +248,18 @@ continuous season.
   symbolic link must name its recorded source, and a hard link (including a
   legacy one from the hard-link era) must still carry the recorded inode. A
   file that was swapped out is skipped rather than deleted.
-- `MF_DRY_RUN=true` makes every command read-only, including `watch`.
-- One instance at a time (a lock file in the state dir).
+- `MF_DRY_RUN=true` makes every command read-only, including `daemon`.
+- One writer at a time (a lock file in the state dir). The daemon holds no lock,
+  so `plan` and `status` still answer while it is running; only a second writer
+  gets exit 4.
 
 ## Layout
 
 ```
 plugins/            one module per source shape (detect + plan)
 mediaforge/                config, scan, registry, planner, reconciler, linker,
-                    liveness, state, nfo, verify, watcher, jellyfin client, cli
+                    liveness, state, nfo, verify, watcher, events, daemon,
+                    jellyfin client, cli
 service/            Start-MediaForge.ps1, Install-MediaForgeTask.ps1,
                     Uninstall-MediaForgeTask.ps1, Install-JellyfinService.ps1,
                     Install-AdminTask.ps1, admin-run.ps1
@@ -257,14 +292,19 @@ Start-ScheduledTask -TaskName MediaForge
 ```
 
 The task registers two triggers (at startup, and every 5 min as a safety net) and
-runs `service\Start-MediaForge.ps1`, which supervises `mediaforge watch` and
+runs `service\Start-MediaForge.ps1`, which supervises `mediaforge daemon` and
 appends every exit to `logs\supervisor.log`. Exit code 4 (lock held by a manual
 command) sleeps 60 s and retries instead of fighting for the lock.
+
+**The supervisor holds the old code.** It starts one python child and that child
+keeps the modules it imported, so a code change reaches the tree only when the
+task is restarted: `Stop-ScheduledTask MediaForge`, kill any leftover
+`python -m mediaforge` process, `Start-ScheduledTask MediaForge`.
 
 **Do not pipe the child's stderr into a PowerShell pipeline while
 `$ErrorActionPreference = 'Stop'`**: with `2>&1` each stderr line becomes an
 ErrorRecord, the first one throws, the pipe closes and python dies — a silent
-30-second crash loop that looks exactly like "the watcher keeps restarting"
+30-second crash loop that looks exactly like "the daemon keeps restarting"
 (measured 2026-11-12). The supervisor redirects to files instead.
 
 Registered as the user rather than SYSTEM on purpose: the state database lives in
