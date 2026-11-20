@@ -193,7 +193,9 @@ can run by hand.
    event's absence is never read as "nothing changed".
 5. `MF_WATCH_MODE=poll` disables events everywhere (a debugger, an unsupported
    filesystem); `off` makes `daemon` refuse to start. A delete only *schedules* the
-   sweep one grace window later - the event is not the pruning decision.
+   sweep one grace window later - the event is not the pruning decision - and the
+   idle sweep asks the child for the configured window instead, so a delete whose
+   event never arrived is still pruned, just later.
 
 Startup is a full pass by design: a restart must reconcile whatever changed while
 the daemon was down, without waiting for an event that will never arrive.

@@ -136,13 +136,14 @@ def test_an_idle_sweep_runs_on_its_own_clock(tmp_path: Path) -> None:
     daemon, runner, _ = _daemon(tmp_path, clock)
     daemon.tick()  # full pass
     daemon.tick()  # the idle sweep is due at startup
-    assert runner.calls[-1] == ("sweep", "--grace", "0")
+    # No event scheduled this one, so the child applies the window itself.
+    assert runner.calls[-1] == ("sweep",)
     clock.advance(29)
     daemon.tick()
-    assert runner.calls.count(("sweep", "--grace", "0")) == 1
+    assert runner.calls.count(("sweep",)) == 1
     clock.advance(2)
     daemon.tick()
-    assert runner.calls.count(("sweep", "--grace", "0")) == 2
+    assert runner.calls.count(("sweep",)) == 2
 
 
 def test_a_changed_signature_syncs_only_that_root(tmp_path: Path) -> None:
@@ -201,6 +202,7 @@ def test_an_overflow_forces_a_full_pass_and_a_sweep(tmp_path: Path) -> None:
     daemon.absorb((Event(EventKind.OVERFLOW, "shows"),))
     daemon.tick()
     assert runner.calls == [("sync", "--full")]
+    clock.advance(2)  # the sweep waits the window, like a delete
     daemon.tick()
     assert runner.calls[-1] == ("sweep", "--grace", "0")
 

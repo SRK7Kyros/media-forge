@@ -197,7 +197,12 @@ class Daemon:
         if ready:
             self._run_sync(ready)
         if self._sweep_due(now):
-            self._run_sweep()
+            # An event-scheduled sweep fires *after* the window, so the child
+            # must not wait it again. The idle sweep has no earlier observation
+            # to compare against, so it applies the window itself - observing
+            # twice, one grace apart, is the whole point of the window.
+            scheduled = self.sweep_at is not None and now >= self.sweep_at
+            self._run_sweep(windowed=not scheduled)
 
     def absorb(self, events: tuple[Event, ...]) -> None:
         for event in events:
@@ -209,7 +214,9 @@ class Daemon:
                 )
                 self.full_wanted = True
                 self.full_not_before = self._now()
-                self._schedule_sweep(self._now())
+                # One window, like a delete: a burst of them is the worst moment
+                # to prune on, because half the files may be mid-replace.
+                self._schedule_sweep(self._now() + self.settings.liveness_grace_s)
                 return
             # A root that is backing off sits on its own clock: an event storm
             # must not pull a failing run forward every few seconds.
@@ -281,13 +288,15 @@ class Daemon:
         self.full_wanted = True
         self.full_not_before = self._now() + delay
 
-    def _run_sweep(self) -> None:
+    def _run_sweep(self, *, windowed: bool) -> None:
         self.stats.sweeps += 1
         self.sweep_at = None
         self.next_sweep = self._now() + self.settings.liveness_interval_s
-        # The grace window is this daemon's job: it fires the sweep only after
-        # the event has been quiet that long, so the child must not wait again.
-        self._run(("sweep", "--grace", "0"))
+        # A scheduled sweep has already waited the window; an idle one asks the
+        # child for the configured window, and the child waits it only when there
+        # is something to wait for.
+        argv = ("sweep",) if windowed else ("sweep", "--grace", "0")
+        self._run(argv)
 
     def _run(self, argv: tuple[str, ...]) -> int:
         code = self.runner(argv)

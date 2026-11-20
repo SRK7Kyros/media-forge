@@ -158,8 +158,12 @@ the source in place. **Never call, restore or re-implement that tool.**
 - **A delete only *schedules* a sweep, one grace window later.** The event is not
   the pruning decision: reacting to it directly would flap the mirror every time a
   downloader replaces a file (remove, then re-add seconds later). The daemon fires
-  `sweep --grace 0` when the window has passed, and the child's own grace is
-  bypassed on purpose so the window is applied once, in one place.
+  `sweep --grace 0` when that window has passed, so it is applied once, by the
+  scheduler. An **idle** sweep has no earlier observation to compare against, so it
+  passes no `--grace` and the child applies the configured window itself (it waits
+  only when something is pending) - otherwise the safety net could never prune a
+  source whose delete event was missed, which is the one case it exists for. An
+  overflowed queue waits the same window before sweeping.
 - **Never pipe a native child's stderr into a pipeline with
   `$ErrorActionPreference='Stop'`.** `& python ... 2>&1 | ForEach-Object` turns
   each stderr line into an ErrorRecord, the first throws, the pipe closes and the
