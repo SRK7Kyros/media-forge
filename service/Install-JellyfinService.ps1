@@ -3,10 +3,18 @@
     Registers Jellyfin as a Windows service (nssm) with a server-owned data dir.
 
 .DESCRIPTION
-    The Jellyfin 10.11 installer ships nssm.exe but does not register a service,
-    so nothing is listening and nothing is initialised until this runs. All
-    mutable state lives under C:\ProgramData\Jellyfin\Server; the install
-    directory stays read-only to the service.
+    The Jellyfin installer ships nssm.exe but no longer registers a service (12.x
+    deletes an existing one and treats the tray app as the default), so nothing
+    is listening and nothing is initialised until this runs. All mutable state
+    lives under C:\ProgramData\Jellyfin\Server; the install directory stays
+    read-only to the service.
+
+    Keep every argument space-free. nssm hands AppParameters to the Win32 parser
+    unquoted and `nssm set ... AppParameters` strips quotes from its own input,
+    so a value containing a space arrives truncated (on 12.x that is fatal:
+    jellyfin.exe exits 1 and nssm throttles the service to Paused). If a spaced
+    path is unavoidable, write Parameters\AppParameters in the registry with real
+    quotes and start with `sc.exe start` - a restart does not clear the throttle.
 
     Elevated only: creating a service and opening the firewall need admin.
 

@@ -275,14 +275,16 @@ writes first. A SYSTEM-owned sidecar without the user's ACE makes every later
 Logs: `C:\ProgramData\media-forge\logs\mediaforge.log` (rotated daily, 14 kept).
 State: `C:\ProgramData\media-forge\mediaforge.db`.
 
-## Jellyfin on this host
+## Jellyfin as a Windows service
 
-`service\Install-JellyfinService.ps1` registers Jellyfin 10.11.11 as the
-auto-start service `JellyfinServer` (nssm, data dir `C:\ProgramData\Jellyfin\Server`).
-It passes only space-free `--datadir/-configdir/-cachedir/-logdir` arguments:
-nssm hands `AppParameters` to the Win32 parser unquoted, so `--webdir "C:\Program
-Files\..."` arrives as `--webdir C:\Program` and the server exits with
-`content directory is either invalid or empty`.
+`service\Install-JellyfinService.ps1` registers the Jellyfin already installed
+under `C:\Program Files\Jellyfin\Server` as the auto-start service
+`JellyfinServer` (nssm, data dir `C:\ProgramData\Jellyfin\Server`). It does not
+pick a version, and it keeps every argument space-free: nssm hands
+`AppParameters` to the Win32 parser unquoted, so `--webdir "C:\Program Files\..."`
+arrives as `--webdir C:\Program` and the server exits with `content directory is
+either invalid or empty`. Jellyfin 12.x deletes the service on upgrade and treats
+the tray app as the default, so a major upgrade means re-running this.
 
 Then `mediaforge jellyfin-check` prints the three library ids; put them in `.env`
 as `MF_JELLYFIN_LIB_MOVIES/SHOWS/ANIME` together with `MF_JELLYFIN_API_KEY`
