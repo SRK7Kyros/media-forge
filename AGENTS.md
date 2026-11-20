@@ -104,6 +104,19 @@ the source in place. **Never call, restore or re-implement that tool.**
   been missing for `MF_LIVENESS_GRACE_SECONDS` (default 2 s, checked every 1 s),
   then removes the folder NFO and the now-empty directory. The grace window is what
   keeps a downloader's delete-and-recreate from flapping the mirror.
+- **The chain must not depend on the database remembering the entry.** The row
+  sweep answers "does this row's source still exist"; a second pass walks the clone
+  tree every `MF_ORPHAN_SCAN_INTERVAL_SECONDS` (default 60 s) and removes a
+  dangling link whose target is under a source root even when no row explains it -
+  after a restored `mediaforge.db`, or a run killed between the link and its row.
+  It is also the only thing that clears a `movie.nfo` left in a title folder whose
+  rows were pruned by a process that then died. Provenance there is the link's own
+  target, never its absence from the table.
+- **A source root that is not readable suspends pruning for everything under it.**
+  An unplugged drive reads exactly like "every file was deleted", and 1 100 rows
+  would be dropped (and every library marked dirty) before anyone noticed. The
+  sweep skips a root whose path is not a directory, reports `paused_roots`, and
+  resumes on its own; the watch log prints the transition once.
 - **`repointed N` on nearly every shows run is `streaming-community` rewriting the
   source, not a link bug.** `refetch --resolution-only` replaces a file (new inode)
   and the clone keeps the old one until the next pass relinks it, so a steady trickle

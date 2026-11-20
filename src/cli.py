@@ -333,6 +333,7 @@ def _cmd_watch(args: argparse.Namespace) -> int:
     try:
         next_scan = 0.0
         next_liveness = 0.0
+        paused_roots: set[str] = set()
         while not stop.is_set():
             if time.monotonic() >= next_scan:
                 next_scan = time.monotonic() + settings.poll_interval_s
@@ -370,6 +371,15 @@ def _cmd_watch(args: argparse.Namespace) -> int:
                     logger.info("pruned %s (source gone)", path)
                 for error in swept.errors:
                     logger.warning("%s", error)
+                for root_id in sorted(swept.paused_roots - paused_roots):
+                    logger.warning(
+                        "pruning paused for %s: its path is not readable, so no entry "
+                        "under it is removed until it comes back",
+                        root_id,
+                    )
+                for root_id in sorted(paused_roots - swept.paused_roots):
+                    logger.info("pruning resumed for %s", root_id)
+                paused_roots = swept.paused_roots
             refresher.tick()
             stop.wait(tick_s)
     except KeyboardInterrupt:

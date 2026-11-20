@@ -68,9 +68,19 @@ start otherwise rather than silently falling back to a copy.
   `MF_LIVENESS_GRACE_SECONDS` (checked every `MF_LIVENESS_INTERVAL_SECONDS`,
   default 1 s), so a delete-and-recreate by a downloader does not flap the
   mirror. A series folder that empties out loses its `tvshow.nfo` and its
-  directory in the same sweep.
+  directory in the same sweep. A second, slower pass walks the clone tree every
+  `MF_ORPHAN_SCAN_INTERVAL_SECONDS` (default 60 s, `0` disables it) and removes
+  dangling links no database row explains - a restored state database, a run
+  killed between the link and its row - and clears a folder NFO left in a title
+  folder that holds nothing else.
 - `hardlink` - an NTFS hard link: same inode, no bytes copied either, but the
   data stays on disk until every name is gone. Same volume only.
+
+Pruning is suspended for any source root whose path cannot be read when the
+sweep runs: an unplugged drive, a renamed folder or a dropped share makes every
+file under it read as deleted, and that reading must never be acted on. The
+watch log says `pruning paused for <root>` once, and `pruning resumed` when it
+comes back; nothing under that root is removed in between.
 
 Creating a symbolic link on Windows needs `SeCreateSymbolicLinkPrivilege`:
 either an elevated process (the `MediaForge` task runs with RunLevel Highest) or

@@ -64,6 +64,7 @@ class Settings:
     link_mode: str
     liveness_interval_s: float
     liveness_grace_s: float
+    orphan_scan_interval_s: float
     state_dir: Path
     log_dir: Path
     log_level: str
@@ -246,6 +247,7 @@ def load_settings(repo: Path | None = None, environ: Mapping[str, str] | None = 
         link_mode=_get(env, "MF_LINK_MODE", "symlink").strip().lower(),
         liveness_interval_s=_float(env, "MF_LIVENESS_INTERVAL_SECONDS", 1.0),
         liveness_grace_s=_float(env, "MF_LIVENESS_GRACE_SECONDS", 2.0),
+        orphan_scan_interval_s=_float(env, "MF_ORPHAN_SCAN_INTERVAL_SECONDS", 60.0),
         state_dir=state_dir,
         log_dir=log_dir,
         log_level=_get(env, "MF_LOG_LEVEL", "INFO").strip().upper(),
@@ -272,9 +274,14 @@ def validate(settings: Settings) -> tuple[str, ...]:
         raise ConfigError(
             f"MF_LINK_MODE={settings.link_mode!r}: only 'symlink' or 'hardlink' exist."
         )
-    if settings.liveness_interval_s < 0 or settings.liveness_grace_s < 0:
+    if (
+        settings.liveness_interval_s < 0
+        or settings.liveness_grace_s < 0
+        or settings.orphan_scan_interval_s < 0
+    ):
         raise ConfigError(
-            "MF_LIVENESS_INTERVAL_SECONDS and MF_LIVENESS_GRACE_SECONDS must not be negative."
+            "MF_LIVENESS_INTERVAL_SECONDS, MF_LIVENESS_GRACE_SECONDS and "
+            "MF_ORPHAN_SCAN_INTERVAL_SECONDS must not be negative."
         )
     if not settings.sources:
         raise ConfigError("No sources configured: set at least one MF_SOURCE_<ROOT_ID>.")
