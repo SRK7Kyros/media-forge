@@ -1,4 +1,4 @@
-"""``python -m src`` is the same entry point as the ``mediaforge`` script."""
+"""``python -m mediaforge`` is the same entry point as the ``mediaforge`` script."""
 
 from __future__ import annotations
 

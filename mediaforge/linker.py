@@ -4,7 +4,7 @@ A clone entry is a second *name* for the source, never a copy:
 
 * ``symlink`` (default) - a symbolic link. It holds no bytes, so deleting the
   source frees the space immediately; what is left behind is a dangling link
-  that :class:`~src.liveness.LivenessSweeper` removes.
+  that :class:`~mediaforge.liveness.LivenessSweeper` removes.
 * ``hardlink`` - an NTFS hard link. Same inode, no bytes copied either, but the
   data stays on disk until every name is gone.
 

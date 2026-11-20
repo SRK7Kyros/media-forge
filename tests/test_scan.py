@@ -5,9 +5,9 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from src.config import SourceRoot
-from src.models import MediaFile
-from src.scan import Scanner, signature_of
+from mediaforge.config import SourceRoot
+from mediaforge.models import MediaFile
+from mediaforge.scan import Scanner, signature_of
 
 from .conftest import write
 
@@ -87,7 +87,7 @@ def test_detect_context_counts_extensions(tmp_path: Path) -> None:
 def test_a_missing_root_is_an_error_not_an_empty_scan(tmp_path: Path) -> None:
     import pytest
 
-    from src.scan import ScanError
+    from mediaforge.scan import ScanError
 
     with pytest.raises(ScanError):
         Scanner().enumerate_root(_source(tmp_path / "does-not-exist"))

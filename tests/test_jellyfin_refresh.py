@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from src.jellyfin import JellyfinError
-from src.jellyfin_refresh import Refresher
-from src.state import SqliteStateStore
+from mediaforge.jellyfin import JellyfinError
+from mediaforge.jellyfin_refresh import Refresher
+from mediaforge.state import SqliteStateStore
 
 
 class FakeClient:

@@ -9,11 +9,11 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from src.config import read_env_file
+from mediaforge.config import read_env_file
 
 REPO = Path(__file__).resolve().parents[1]
 EXAMPLE = REPO / "example.env"
-CONFIG_SOURCE = REPO / "src" / "config.py"
+CONFIG_SOURCE = REPO / "mediaforge" / "config.py"
 
 _KEY_LINE = re.compile(r"^\s*#?\s*(MF_[A-Z0-9_]+)=")
 _LITERAL_KEY = re.compile(r'"(MF_[A-Z0-9_]+)"')

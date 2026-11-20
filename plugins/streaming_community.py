@@ -12,10 +12,10 @@ from __future__ import annotations
 import re
 from collections import defaultdict
 
-from src import naming
-from src.models import PlannedItem
-from src.naming import franchise, parse
-from src.plugin_api import DetectContext, Detected, PlanContext, read_bool
+from mediaforge import naming
+from mediaforge.models import PlannedItem
+from mediaforge.naming import franchise, parse
+from mediaforge.plugin_api import DetectContext, Detected, PlanContext, read_bool
 
 id = "streaming_community"
 name = "streaming-community downloader"

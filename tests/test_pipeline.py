@@ -5,11 +5,11 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from src import fsutil
-from src.config import load_settings
-from src.linker import Linker
-from src.pipeline import Pipeline, SyncReport
-from src.state import LinkRecord, SqliteStateStore
+from mediaforge import fsutil
+from mediaforge.config import load_settings
+from mediaforge.linker import Linker
+from mediaforge.pipeline import Pipeline, SyncReport
+from mediaforge.state import LinkRecord, SqliteStateStore
 
 from .conftest import Fixture, build_library, make_env, requires_symlinks, write
 

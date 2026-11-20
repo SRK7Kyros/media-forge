@@ -327,5 +327,5 @@ __all__ = ["Pipeline", "RootOutcome", "SyncReport", "inspect_sources", "plugin_d
 
 
 # ``parse`` is imported for plugins that want the shared helpers; re-exported so a
-# plugin can ``from src.pipeline import parse`` without a second import path.
+# plugin can ``from mediaforge.pipeline import parse`` without a second import path.
 __all__ += ["parse"]

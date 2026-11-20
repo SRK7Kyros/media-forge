@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import os
 
-from src.linker import Linker
-from src.state import SqliteStateStore
-from src.verify import Verifier, summarise
+from mediaforge.linker import Linker
+from mediaforge.state import SqliteStateStore
+from mediaforge.verify import Verifier, summarise
 
 from .conftest import Fixture, requires_symlinks, write
 

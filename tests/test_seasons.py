@@ -6,10 +6,10 @@ from pathlib import Path, PurePath
 
 import pytest
 
-from src.models import MediaFile
-from src.naming import seasons
-from src.plugin_api import PlanContext
-from src.plugin_loader import load_plugins
+from mediaforge.models import MediaFile
+from mediaforge.naming import seasons
+from mediaforge.plugin_api import PlanContext
+from mediaforge.plugin_loader import load_plugins
 
 from .conftest import PLUGIN_DIR
 

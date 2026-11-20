@@ -7,12 +7,12 @@ from pathlib import Path
 
 import pytest
 
-from src import fsutil
-from src.config import Settings, load_settings
-from src.linker import Linker
-from src.pipeline import Pipeline
-from src.plugin_loader import load_plugins
-from src.state import SqliteStateStore
+from mediaforge import fsutil
+from mediaforge.config import Settings, load_settings
+from mediaforge.linker import Linker
+from mediaforge.pipeline import Pipeline
+from mediaforge.plugin_loader import load_plugins
+from mediaforge.state import SqliteStateStore
 
 REPO = Path(__file__).resolve().parents[1]
 PLUGIN_DIR = REPO / "plugins"
@@ -75,8 +75,8 @@ class Fixture:
 
 def build_library(tmp_path: Path, **extra: str) -> Fixture:
     """The exact shapes of the real library, shrunk to a handful of files."""
-    shows = tmp_path / "src-shows"
-    anime = tmp_path / "src-anime"
+    shows = tmp_path / "source-shows"
+    anime = tmp_path / "source-anime"
 
     write(shows / "Diavoli (2020)" / "Diavoli (2020) 1080p - S01E01.mkv")
     write(shows / "Diavoli (2020)" / "Diavoli (2020) 1080p - S01E02.mkv")

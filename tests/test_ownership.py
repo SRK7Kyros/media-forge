@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from src import fsutil
+from mediaforge import fsutil
 
 from .conftest import requires_symlinks, write
 

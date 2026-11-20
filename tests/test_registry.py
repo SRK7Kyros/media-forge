@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from src.plugin_api import DetectContext
-from src.plugin_loader import load_plugins, safe_detect
-from src.registry import NoPluginError, select, summarise
+from mediaforge.plugin_api import DetectContext
+from mediaforge.plugin_loader import load_plugins, safe_detect
+from mediaforge.registry import NoPluginError, select, summarise
 
 GOOD = '''
 id = "good"

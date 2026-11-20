@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from src.watcher import PollingWatcher
+from mediaforge.watcher import PollingWatcher
 
 
 class Clock:

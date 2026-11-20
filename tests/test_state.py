@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from src.models import Op
-from src.state import SCHEMA_VERSION, LinkRecord, SingleInstanceLock, SqliteStateStore
+from mediaforge.models import Op
+from mediaforge.state import SCHEMA_VERSION, LinkRecord, SingleInstanceLock, SqliteStateStore
 
 
 def _record(source: str, target: str, **overrides: object) -> LinkRecord:

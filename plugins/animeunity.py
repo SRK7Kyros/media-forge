@@ -6,7 +6,7 @@ name carries ``Movie`` (Haikyu). Episode integers are never assumed contiguous:
 ``Inazuma Eleven (ITA) (2008)`` has 126 files and a hole before 127.
 
 A show listed in ``anime_seasons.json`` is laid out in its provider's seasons
-instead of one flat ``Season 01``; see :mod:`src.naming.seasons`.
+instead of one flat ``Season 01``; see :mod:`mediaforge.naming.seasons`.
 """
 
 from __future__ import annotations
@@ -16,11 +16,11 @@ import re
 from collections import defaultdict
 from pathlib import Path
 
-from src import naming
-from src.models import PlannedItem
-from src.naming import parse
-from src.naming import seasons as seasonmap
-from src.plugin_api import DetectContext, Detected, PlanContext, read_bool
+from mediaforge import naming
+from mediaforge.models import PlannedItem
+from mediaforge.naming import parse
+from mediaforge.naming import seasons as seasonmap
+from mediaforge.plugin_api import DetectContext, Detected, PlanContext, read_bool
 
 id = "animeunity"
 name = "animeunity (Italian dub)"

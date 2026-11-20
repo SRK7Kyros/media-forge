@@ -6,7 +6,7 @@ from pathlib import PurePath
 
 import pytest
 
-from src.naming import clone_folder, episode_layout, franchise, movie_layout, parse, sanitize
+from mediaforge.naming import clone_folder, episode_layout, franchise, movie_layout, parse, sanitize
 
 
 def test_split_year_reads_the_trailing_year() -> None:

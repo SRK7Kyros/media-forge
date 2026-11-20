@@ -56,14 +56,14 @@ function Resolve-Python {
     throw "no interpreter found: create $venv or pass -Python <path>"
 }
 
-if (-not (Test-Path -LiteralPath (Join-Path $RepoRoot 'src\cli.py'))) {
+if (-not (Test-Path -LiteralPath (Join-Path $RepoRoot 'mediaforge\cli.py'))) {
     throw "RepoRoot does not look like a media-forge checkout: $RepoRoot"
 }
 
-# Run from the checkout so `-m src` and a relative MF_PLUGIN_DIR resolve.
+# Run from the checkout so `-m mediaforge` and a relative MF_PLUGIN_DIR resolve.
 Set-Location -LiteralPath $RepoRoot
 $pythonPath = Resolve-Python -Repo $RepoRoot
-$argumentList = @('-m', 'src', 'watch') + $ExtraArgs
+$argumentList = @('-m', 'mediaforge', 'watch') + $ExtraArgs
 
 Write-Line "python: $pythonPath"
 Write-Line "repo:   $RepoRoot"

@@ -223,7 +223,7 @@ continuous season.
 
 ```
 plugins/            one module per source shape (detect + plan)
-src/                config, scan, registry, planner, reconciler, linker,
+mediaforge/                config, scan, registry, planner, reconciler, linker,
                     liveness, state, nfo, verify, watcher, jellyfin client, cli
 service/            Start-MediaForge.ps1, Install-MediaForgeTask.ps1,
                     Uninstall-MediaForgeTask.ps1, Install-JellyfinService.ps1,
@@ -233,18 +233,18 @@ tests/              pytest, including a real NTFS tree end to end
 
 A plugin is a plain module exposing `id`, `name`, `version`, `priority`,
 `default_library`, `detect(ctx) -> Detected | float` and
-`plan(ctx) -> Iterable[PlannedItem]`. See `src/plugin_api.py`.
+`plan(ctx) -> Iterable[PlannedItem]`. See `mediaforge/plugin_api.py`.
 
 ## Running it for real
 
 ```powershell
 uv venv .venv --python 3.11
 uv pip install --python .venv\Scripts\python.exe -e .[dev]
-.venv\Scripts\python.exe -m src init
-.venv\Scripts\python.exe -m src plugins   # each root must resolve
-.venv\Scripts\python.exe -m src plan      # read this before writing anything
-.venv\Scripts\python.exe -m src sync
-.venv\Scripts\python.exe -m src verify
+.venv\Scripts\python.exe -m mediaforge init
+.venv\Scripts\python.exe -m mediaforge plugins   # each root must resolve
+.venv\Scripts\python.exe -m mediaforge plan      # read this before writing anything
+.venv\Scripts\python.exe -m mediaforge sync
+.venv\Scripts\python.exe -m mediaforge verify
 ```
 
 Boot persistence (runs as the interactive user via S4U — no password stored, no
@@ -300,7 +300,7 @@ local metadata reader to NFO so a `tvshow.nfo` it did not write is not ignored.
 
 ```powershell
 .venv\Scripts\python.exe -m pytest -q
-.venv\Scripts\ruff.exe check src plugins tests
+.venv\Scripts\ruff.exe check mediaforge plugins tests
 ```
 
 The suite builds a real two-root library in a temporary directory and drives a

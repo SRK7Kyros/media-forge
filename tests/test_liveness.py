@@ -6,10 +6,10 @@ import os
 from dataclasses import replace
 from pathlib import Path
 
-from src import fsutil
-from src.linker import Linker
-from src.liveness import LivenessSweeper
-from src.state import SqliteStateStore
+from mediaforge import fsutil
+from mediaforge.linker import Linker
+from mediaforge.liveness import LivenessSweeper
+from mediaforge.state import SqliteStateStore
 
 from .conftest import Fixture, requires_symlinks
 
@@ -152,7 +152,7 @@ def test_an_unreadable_source_root_pauses_pruning_instead_of_emptying_the_clone(
     target = library.clone / "Movies" / "Iron Man (2008)" / "Iron Man (2008).mkv"
     source.unlink()
 
-    away = tmp_path / "src-shows-away"
+    away = tmp_path / "source-shows-away"
     library.source("shows").rename(away)
     clock = Clock()
     sweeper = _sweeper(library, store, clock)

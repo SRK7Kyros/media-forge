@@ -24,7 +24,7 @@ jobs:
           uv pip install --python .venv\Scripts\python.exe -e ".[dev]"
 
       - name: lint
-        run: .venv\Scripts\python.exe -m ruff check src plugins tests
+        run: .venv\Scripts\python.exe -m ruff check mediaforge plugins tests
 
       - name: test
         run: .venv\Scripts\python.exe -m pytest -q

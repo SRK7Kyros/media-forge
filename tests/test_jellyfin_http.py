@@ -10,7 +10,7 @@ from __future__ import annotations
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-from src.jellyfin import HttpJellyfinClient
+from mediaforge.jellyfin import HttpJellyfinClient
 
 
 class _Recorder(BaseHTTPRequestHandler):

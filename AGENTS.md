@@ -3,7 +3,7 @@
 Maintains a Jellyfin-shaped **clone tree** beside an existing media library. Every
 clone entry is a symbolic link, so deleting a source frees its bytes at once and
 the dangling entry is swept within seconds. It is the non-destructive replacement for
-`streaming-community`'s deleted `src/tools/migrate_jellyfin.py`, which restructured
+`streaming-community`'s deleted `mediaforge/tools/migrate_jellyfin.py`, which restructured
 the source in place. **Never call, restore or re-implement that tool.**
 
 ## Contract
@@ -16,21 +16,21 @@ the source in place. **Never call, restore or re-implement that tool.**
 - `MF_LINK_MODE=symlink` is the default and the contract: a clone entry holds no
   bytes, so a deleted source frees them immediately. `MF_LINK_MODE=hardlink` is
   the pre-2026-11-13 behaviour and stays supported (same volume only,
-  `src/config.py::validate` enforces it). A copy is never an acceptable fallback
+  `mediaforge/config.py::validate` enforces it). A copy is never an acceptable fallback
   (it doubles 670 GB of media).
 
 ## Layout
 
 | path | role |
 |---|---|
-| `src/config.py` | `.env` + env → `Settings`; `validate()` is the only place that may reject startup |
-| `src/scan.py` | one `stat` walk per root; `signature` drives polling |
-| `src/registry.py` | confidence competition between plugins |
-| `src/planner.py` | diff → ordered `Op` list; owns every prune decision |
-| `src/reconciler.py` | executes `Op`s; journaled, row-before-syscall |
-| `src/liveness.py` | prunes entries whose source is gone, on its own clock |
-| `src/state.py` | SQLite: provenance, NFO hashes, run journal, lock |
-| `src/naming/seasons.py` | absolute episode numbers → a provider's season layout |
+| `mediaforge/config.py` | `.env` + env → `Settings`; `validate()` is the only place that may reject startup |
+| `mediaforge/scan.py` | one `stat` walk per root; `signature` drives polling |
+| `mediaforge/registry.py` | confidence competition between plugins |
+| `mediaforge/planner.py` | diff → ordered `Op` list; owns every prune decision |
+| `mediaforge/reconciler.py` | executes `Op`s; journaled, row-before-syscall |
+| `mediaforge/liveness.py` | prunes entries whose source is gone, on its own clock |
+| `mediaforge/state.py` | SQLite: provenance, NFO hashes, run journal, lock |
+| `mediaforge/naming/seasons.py` | absolute episode numbers → a provider's season layout |
 | `plugins/*.py` | one module per source shape (`detect` + `plan`) |
 | `plugins/anime_seasons.json` | season-layout snapshots, one entry per mapped show |
 | `service/*.ps1` | boot persistence via Task Scheduler |
@@ -38,7 +38,7 @@ the source in place. **Never call, restore or re-implement that tool.**
 ## Conventions
 
 - uv-managed, Python 3.11, ruff line length 100 (`E,F,W,I,B,UP`), pytest.
-- `src/` package, tests import it as `from src.x import y` (there is a
+- `mediaforge/` package, tests import it as `from mediaforge.x import y` (there is a
   `tests/__init__.py` so the suites can share `conftest` helpers).
 - Functions small, no mutation of dataclass inputs, no `print` in library code
   (the CLI prints; everything else logs through `mediaforge`).
@@ -111,7 +111,7 @@ the source in place. **Never call, restore or re-implement that tool.**
   whose inode is the recorded one. Without that branch every orphan from the
   hard-link era is refused as "not a link this tool created" and keeps its bytes.
 - **A symbolic link does not disappear when its target does.** It dangles, and
-  Jellyfin reports it as an error, so `src/liveness.py` sweeps rows whose source has
+  Jellyfin reports it as an error, so `mediaforge/liveness.py` sweeps rows whose source has
   been missing for `MF_LIVENESS_GRACE_SECONDS` (default 2 s, checked every 1 s),
   then removes the folder NFO and the now-empty directory. The grace window is what
   keeps a downloader's delete-and-recreate from flapping the mirror.

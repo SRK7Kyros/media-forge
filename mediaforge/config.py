@@ -78,7 +78,7 @@ class Settings:
 
 
 def repo_root() -> Path:
-    """The source checkout that contains ``src/``."""
+    """The source checkout that contains ``mediaforge/``."""
     override = os.environ.get("MF_ROOT")
     if override:
         return Path(os.path.abspath(override))
