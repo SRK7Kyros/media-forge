@@ -5,7 +5,7 @@
 .DESCRIPTION
     One task, two triggers, no window:
       * at startup  - the tree is already correct after a reboot;
-      * every 5 min - a safety net for a watcher that died in a way the
+      * every 5 min - a safety net for a daemon that died in a way the
                       supervisor did not see (it is idempotent and exits at once
                       when the lock is held or nothing changed).
 

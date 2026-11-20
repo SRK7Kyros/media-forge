@@ -268,7 +268,7 @@ def load_settings(repo: Path | None = None, environ: Mapping[str, str] | None = 
         anime_movie_hints=re.compile(
             _get(env, "MF_ANIME_MOVIE_HINTS", r"\b(Movie|Film)\b"), re.IGNORECASE
         ),
-        watch_mode=_get(env, "MF_WATCH_MODE", "poll").strip().lower(),
+        watch_mode=_get(env, "MF_WATCH_MODE", "events").strip().lower(),
         poll_interval_s=_float(env, "MF_POLL_INTERVAL_SECONDS", 15.0),
         settle_s=_float(env, "MF_SETTLE_SECONDS", 20.0),
         min_gap_s=_float(env, "MF_MIN_GAP_SECONDS", 30.0),
@@ -278,7 +278,7 @@ def load_settings(repo: Path | None = None, environ: Mapping[str, str] | None = 
         prune_enabled=_bool(env, "MF_PRUNE_ENABLED", True),
         prune_require_known_inode=_bool(env, "MF_PRUNE_REQUIRE_KNOWN_INODE", True),
         link_mode=_get(env, "MF_LINK_MODE", "symlink").strip().lower(),
-        liveness_interval_s=_float(env, "MF_LIVENESS_INTERVAL_SECONDS", 1.0),
+        liveness_interval_s=_float(env, "MF_LIVENESS_INTERVAL_SECONDS", 30.0),
         liveness_grace_s=_float(env, "MF_LIVENESS_GRACE_SECONDS", 2.0),
         orphan_scan_interval_s=_float(env, "MF_ORPHAN_SCAN_INTERVAL_SECONDS", 60.0),
         state_dir=state_dir,
@@ -299,8 +299,10 @@ def load_settings(repo: Path | None = None, environ: Mapping[str, str] | None = 
 
 def validate(settings: Settings) -> tuple[str, ...]:
     """Raise :class:`ConfigError` for unusable settings, return soft warnings."""
-    if settings.watch_mode not in {"poll", "off"}:
-        raise ConfigError(f"MF_WATCH_MODE={settings.watch_mode!r}: only 'poll' or 'off' exist.")
+    if settings.watch_mode not in {"events", "poll", "off"}:
+        raise ConfigError(
+            f"MF_WATCH_MODE={settings.watch_mode!r}: only 'events', 'poll' or 'off' exist."
+        )
     if settings.log_level not in {"DEBUG", "INFO", "WARNING", "ERROR"}:
         raise ConfigError(f"MF_LOG_LEVEL={settings.log_level!r} is not a log level.")
     if settings.link_mode not in {"symlink", "hardlink"}:

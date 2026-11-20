@@ -1,19 +1,27 @@
-"""Signature polling.
+"""When to reconcile: settle windows, minimum gaps, startup grace.
 
-A kernel watcher is deliberately not used. ``FileSystemWatcher`` has been
-observed silently missing changes, and ``ReadDirectoryChangesW`` drops events on
-burst overflow without an error - a failure mode that is indistinguishable from
-"nothing happened". A stat walk over ~1700 entries costs milliseconds and cannot
-lie.
+This module decides *when*, never *what*. The truth is the stat signature that
+:mod:`mediaforge.scan` computes; a root becomes eligible from either input:
+
+* a filesystem event (:mod:`mediaforge.events`) - a hint that something moved,
+  worth acting on immediately but never a statement about what is now true;
+* a changed signature, which is the only signal a root on an SMB/NFS share can
+  give.
+
+A root that keeps changing keeps re-arming, so a download still being written is
+not reconciled mid-file. ``startup_grace_s`` suppresses the burst that exists
+only because the process just started; the daemon's first pass already covers it.
+
+The periodic full pass deliberately lives in :mod:`mediaforge.daemon`, not here:
+the watcher answers "did something change", and the safety net exists precisely
+for the case where the answer is a wrong "no".
 """
 
 from __future__ import annotations
 
 import time
 from collections.abc import Mapping
-from dataclasses import dataclass, field
-
-from .models import MediaFile
+from dataclasses import dataclass
 
 
 @dataclass(slots=True)
@@ -21,7 +29,6 @@ class RootWatch:
     signature: str | None = None
     armed_at: float | None = None
     last_run: float = 0.0
-    previous_items: dict[str, tuple[int, int]] = field(default_factory=dict)
 
 
 class PollingWatcher:
@@ -31,51 +38,61 @@ class PollingWatcher:
         *,
         settle_s: float = 20.0,
         min_gap_s: float = 30.0,
-        full_interval_s: float = 21600.0,
         startup_grace_s: float = 60.0,
         monotonic=time.monotonic,
     ) -> None:
         self.root_ids = root_ids
         self.settle_s = settle_s
         self.min_gap_s = min_gap_s
-        self.full_interval_s = full_interval_s
         self.startup_grace_s = startup_grace_s
         self._monotonic = monotonic
         self._states: dict[str, RootWatch] = {rid: RootWatch() for rid in root_ids}
         self._started_at: float | None = None
-        self._last_full = 0.0
 
     def start(self) -> None:
-        now = self._monotonic()
-        self._started_at = now
-        self._last_full = now
+        self._started_at = self._monotonic()
 
-    def poll(self, signatures: Mapping[str, str]) -> list[str]:
-        """Root ids whose change has settled and which may be reconciled now."""
+    def arm(self, root_id: str, now: float | None = None) -> None:
+        """Make a root eligible: an event, or a signature that changed.
+
+        Called for every event, so a burst keeps pushing the settle window out -
+        that is the point, not a leak.
+        """
         if self._started_at is None:
             self.start()
-        now = self._monotonic()
-        in_grace = now - self._started_at < self.startup_grace_s
-        full_due = now - self._last_full >= self.full_interval_s
-        ready: list[str] = []
+        state = self._states.get(root_id)
+        if state is None:
+            return
+        now = self._monotonic() if now is None else now
+        if now - self._started_at < self.startup_grace_s:
+            return
+        state.armed_at = now
 
+    def poll(self, signatures: Mapping[str, str]) -> list[str]:
+        """Feed signatures for the roots that must be polled, return the ready ones.
+
+        A first signature only establishes a baseline: it says where the root
+        started, not that anything changed. Passing an empty mapping is the way
+        to ask "what is ready?" when events are the trigger.
+        """
+        if self._started_at is None:
+            self.start()
+        for root_id, signature in signatures.items():
+            state = self._states.get(root_id)
+            if state is None:
+                continue
+            previous = state.signature
+            state.signature = signature
+            if previous is not None and signature != previous:
+                self.arm(root_id)
+        return self.ready()
+
+    def ready(self, now: float | None = None) -> list[str]:
+        """Roots whose change has settled and which may be reconciled now."""
+        now = self._monotonic() if now is None else now
+        ready: list[str] = []
         for root_id in self.root_ids:
             state = self._states[root_id]
-            signature = signatures.get(root_id)
-            if state.signature is None:
-                state.signature = signature
-                continue
-            if signature != state.signature:
-                state.signature = signature
-                if not in_grace:
-                    state.armed_at = now
-                continue
-
-            if full_due:
-                ready.append(root_id)
-                state.armed_at = None
-                state.last_run = now
-                continue
             if state.armed_at is None:
                 continue
             if now - state.armed_at < self.settle_s:
@@ -85,32 +102,28 @@ class PollingWatcher:
             ready.append(root_id)
             state.armed_at = None
             state.last_run = now
-
-        if full_due:
-            self._last_full = now
         return ready
 
-    def mark_ran(self, root_id: str) -> None:
-        self._states[root_id].last_run = self._monotonic()
+    def next_due(self, now: float | None = None) -> float | None:
+        """Earliest monotonic time at which :meth:`ready` could return a root.
 
-    def settle(
-        self, root_id: str, files: tuple[MediaFile, ...], now_wall: float | None = None
-    ) -> tuple[MediaFile, ...]:
-        """Files that were unchanged since the previous poll *and* are old enough.
-
-        Two conditions, not one: the age rule alone would accept a file that is
-        being appended to slowly, and the stability rule alone would accept a
-        file written once, seconds ago, whose writer is about to rename it.
+        The daemon uses it as its wait timeout, so a settle window that expires
+        before the next poll tick wakes the loop instead of being rounded up to
+        the tick. ``None`` means nothing is armed.
         """
-        now = time.time() if now_wall is None else now_wall
-        state = self._states[root_id]
-        current = {str(media.relpath): (media.size, media.mtime_ns) for media in files}
-        settled: list[MediaFile] = []
-        for media in files:
-            key = str(media.relpath)
-            stable = state.previous_items.get(key) == current[key]
-            old_enough = (now - media.mtime_ns / 1_000_000_000) >= self.settle_s
-            if stable and old_enough:
-                settled.append(media)
-        state.previous_items = current
-        return tuple(settled)
+        now = self._monotonic() if now is None else now
+        candidates = [
+            max(state.armed_at + self.settle_s, state.last_run + self.min_gap_s)
+            for state in self._states.values()
+            if state.armed_at is not None
+        ]
+        if not candidates:
+            return None
+        return min(candidates)
+
+    def mark_ran(self, root_id: str, now: float | None = None) -> None:
+        """Record a run the watcher did not start (a full pass covers every root)."""
+        state = self._states.get(root_id)
+        if state is None:
+            return
+        state.last_run = self._monotonic() if now is None else now

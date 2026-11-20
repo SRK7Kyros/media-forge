@@ -1,12 +1,16 @@
 <#
 .SYNOPSIS
-    Supervises `mediaforge watch`.
+    Supervises `mediaforge daemon`.
 
 .DESCRIPTION
-    Runs the watcher in a loop and restarts it if it exits. The python process
+    Runs the daemon in a loop and restarts it if it exits. The python process
     itself already writes a rotating log (%ProgramData%\media-forge\logs by
     default), so this wrapper only needs to report crashes to the event-free
     stdout that Task Scheduler captures.
+
+    The daemon owns no state: every reconcile it starts is a `mediaforge sync`
+    or `mediaforge sweep` child. So a restart here costs a full pass, nothing
+    more - it never leaves a half-written database behind.
 
     Nothing here parses the source tree; that is the tool's job. Keep this
     script dumb: a supervisor that does work of its own is a second place to
@@ -24,7 +28,7 @@ $ErrorActionPreference = 'Stop'
 
 # Task Scheduler discards the action's stdout, so a supervisor that only writes
 # there is invisible. Mirror every line into <repo>\logs\supervisor.log: the
-# restart loop is the only place that can explain why the watcher keeps dying.
+# restart loop is the only place that can explain why the daemon keeps dying.
 $script:SupervisorLog = Join-Path (Split-Path -Parent (Split-Path -Parent $PSCommandPath)) 'logs\supervisor.log'
 
 function Write-Line {
@@ -63,21 +67,21 @@ if (-not (Test-Path -LiteralPath (Join-Path $RepoRoot 'mediaforge\cli.py'))) {
 # Run from the checkout so `-m mediaforge` and a relative MF_PLUGIN_DIR resolve.
 Set-Location -LiteralPath $RepoRoot
 $pythonPath = Resolve-Python -Repo $RepoRoot
-$argumentList = @('-m', 'mediaforge', 'watch') + $ExtraArgs
+$argumentList = @('-m', 'mediaforge', 'daemon') + $ExtraArgs
 
 Write-Line "python: $pythonPath"
 Write-Line "repo:   $RepoRoot"
 
 while ($true) {
-    Write-Line 'starting mediaforge watch'
+    Write-Line 'starting mediaforge daemon'
     $started = Get-Date
     # Never pipe a native command's stderr into a pipeline while
     # ErrorActionPreference is Stop: PowerShell turns each stderr line into an
     # ErrorRecord, the first one throws, the pipe closes and the child dies.
     # That produced a silent 30-second crash loop (measured 2026-11-12).
     # Redirect to files instead and report them after the child exits.
-    $outFile = Join-Path $RepoRoot 'logs\watch.out'
-    $errFile = Join-Path $RepoRoot 'logs\watch.err'
+    $outFile = Join-Path $RepoRoot 'logs\daemon.out'
+    $errFile = Join-Path $RepoRoot 'logs\daemon.err'
     $code = 1
     try {
         $proc = Start-Process -FilePath $pythonPath -ArgumentList $argumentList `
@@ -86,10 +90,10 @@ while ($true) {
         $code = $proc.ExitCode
     }
     catch {
-        Write-Line "watcher failed to start: $($_.Exception.Message)"
+        Write-Line "daemon failed to start: $($_.Exception.Message)"
     }
     $ran = ((Get-Date) - $started).TotalSeconds
-    Write-Line "mediaforge watch exited with $code after $([int]$ran)s"
+    Write-Line "mediaforge daemon exited with $code after $([int]$ran)s"
     foreach ($stream in @($errFile, $outFile)) {
         if (Test-Path -LiteralPath $stream) {
             Get-Content -LiteralPath $stream -Tail 15 | Where-Object { $_ } | ForEach-Object {

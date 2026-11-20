@@ -1,9 +1,10 @@
 """The command line.
 
-Two commands do the work (``sync`` and ``watch``) and the rest exist to make the
-tool auditable before and after it runs: ``plan`` shows what would happen,
-``verify`` proves what did, ``status`` and ``plugins`` explain the current state,
-and ``jellyfin-check`` fills in the library ids.
+Two verbs do the work (``sync`` and ``sweep``) and ``daemon`` decides when to run
+them; the rest exist to make the tool auditable before and after it runs:
+``plan`` shows what would happen, ``verify`` proves what did, ``status`` and
+``plugins`` explain the current state, and ``jellyfin-check`` fills in the
+library ids.
 """
 
 from __future__ import annotations
@@ -14,7 +15,6 @@ import shutil
 import signal
 import sys
 import threading
-import time
 from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
@@ -22,24 +22,17 @@ from typing import Any
 
 from . import __version__, fsutil
 from .config import LIBRARIES, ConfigError, Settings, load_settings, validate
+from .daemon import Daemon, SubprocessRunner
+from .exitcodes import EXIT_CONFIG, EXIT_LOCKED, EXIT_OK, EXIT_PROBLEMS, EXIT_UNREACHABLE
 from .jellyfin import HttpJellyfinClient, JellyfinError
 from .jellyfin_refresh import Refresher
 from .linker import Linker
-from .liveness import LivenessSweeper
+from .liveness import LivenessSweeper, SweepResult
 from .logging_setup import configure
 from .pipeline import Pipeline, RootOutcome, SyncReport, inspect_sources, plugin_dir
 from .plugin_loader import load_plugins
-from .scan import ScanError, Scanner
 from .state import SingleInstanceLock, SqliteStateStore
 from .verify import Verifier, summarise
-from .watcher import PollingWatcher
-
-EXIT_OK = 0
-EXIT_PROBLEMS = 1
-EXIT_CONFIG = 2
-EXIT_UNREACHABLE = 3
-EXIT_LOCKED = 4
-
 
 # ── bootstrap ────────────────────────────────────────────────────────────────
 
@@ -168,7 +161,7 @@ def _cmd_init(args: argparse.Namespace) -> int:
         "  2. mediaforge plugins      # confirm each root is recognised",
         "  3. mediaforge plan         # read the full diff, write nothing",
         "  4. mediaforge sync         # create the links and NFOs",
-        "  5. Install-MediaForgeTask  # or: mediaforge watch",
+        "  5. Install-MediaForgeTask  # or: mediaforge daemon",
     ]
     _emit(args, {"clone_root": str(settings.clone_root), "created": created}, lines)
     return EXIT_OK
@@ -181,6 +174,7 @@ def _run_sync(
     list_ops: bool,
     trigger: str,
     all_ops: bool = False,
+    full: bool = False,
 ) -> int:
     settings = _load(args)
     effective_dry_run = settings.dry_run if dry_run is None else dry_run
@@ -229,13 +223,27 @@ def _run_sync(
                     )
                     lines += listed
 
+        swept: SweepResult | None = None
+        if full:
+            sweeper = LivenessSweeper(
+                settings, store, Linker(settings.link_mode), dry_run=effective_dry_run
+            )
+            swept = sweeper.sweep(grace_s=0.0, force_tree=True)
+            for path in swept.pruned:
+                lines.append(f"  pruned {path} (source gone)")
+            for error in swept.errors:
+                lines.append(f"  warning: {error}")
+
         refreshed = False
         if not effective_dry_run:
             refreshed = _refresh_now(settings, store, logger)
         if refreshed:
             lines.append("jellyfin: refresh requested")
 
-        _emit(args, _sync_payload(report, dry_run=effective_dry_run), lines)
+        payload = _sync_payload(report, dry_run=effective_dry_run)
+        if swept is not None:
+            payload["sweep"] = _sweep_payload(swept, dry_run=effective_dry_run)
+        _emit(args, payload, lines)
         return EXIT_OK if report.ok else EXIT_PROBLEMS
     finally:
         store.close()
@@ -274,7 +282,8 @@ def _cmd_sync(args: argparse.Namespace) -> int:
         args,
         dry_run=dry_run,
         list_ops=False,
-        trigger="manual",
+        trigger=getattr(args, "trigger", "manual"),
+        full=getattr(args, "full", False),
     )
 
 
@@ -282,113 +291,85 @@ def _cmd_plan(args: argparse.Namespace) -> int:
     return _run_sync(args, dry_run=True, list_ops=True, trigger="plan", all_ops=True)
 
 
-def _cmd_watch(args: argparse.Namespace) -> int:
+def _sweep_payload(result: SweepResult, *, dry_run: bool) -> dict[str, Any]:
+    return {
+        "dry_run": dry_run,
+        "pruned": list(result.pruned),
+        "errors": list(result.errors),
+        "libraries": sorted(result.libraries),
+        "paused_roots": sorted(result.paused_roots),
+    }
+
+
+def _sweep_lines(result: SweepResult, *, grace: float) -> list[str]:
+    if not result.pruned and not result.errors and not result.paused_roots:
+        return ["no dangling entries"]
+    lines = [f"pruned {path} (source gone)" for path in result.pruned]
+    lines += [f"warning: {error}" for error in result.errors]
+    for root_id in sorted(result.paused_roots):
+        lines.append(
+            f"pruning paused for {root_id}: its path is not readable, so nothing under "
+            "it is removed until it comes back"
+        )
+    return lines
+
+
+def _cmd_sweep(args: argparse.Namespace) -> int:
     settings = _load(args)
-    logger = configure(settings)
+    configure(settings)
     store = _open_store(settings)
     lock = _lock(settings)
     if not lock.acquire():
-        print(f"another mediaforge holds {lock.path}", file=sys.stderr)
+        print(
+            f"another mediaforge holds {lock.path}; stop it or wait for it to finish",
+            file=sys.stderr,
+        )
         store.close()
         return EXIT_LOCKED
 
     dry_run = True if args.dry_run else (False if args.apply else settings.dry_run)
-    stop = _stop_event()
-    refresher = Refresher(
-        store,
-        HttpJellyfinClient(settings.jellyfin_url, settings.jellyfin_api_key),
-        library_ids=settings.jellyfin_lib_ids,
-        debounce_s=settings.jellyfin_debounce_s,
-        timeout_s=settings.jellyfin_timeout_s,
-    )
-    if settings.jellyfin_refresh and not settings.jellyfin_api_key:
-        logger.warning("Jellyfin refresh is on but the API key is empty; refreshes are skipped")
-    if not settings.jellyfin_refresh:
-        logger.info("Jellyfin refresh disabled by MF_JELLYFIN_REFRESH=false")
-
-    scanner = Scanner(settings.exclude_globs)
-    watcher = PollingWatcher(
-        tuple(source.root_id for source in settings.sources),
-        settle_s=settings.settle_s,
-        min_gap_s=settings.min_gap_s,
-        full_interval_s=settings.full_scan_interval_s,
-        startup_grace_s=settings.startup_grace_s,
-    )
-    watcher.start()
-    linker = Linker(settings.link_mode)
-    pipeline = Pipeline(settings, store, linker, dry_run=dry_run, interrupt=stop)
-    sweeper = LivenessSweeper(settings, store, linker, dry_run=dry_run)
-    tick_s = settings.poll_interval_s
-    if settings.liveness_interval_s > 0:
-        tick_s = min(tick_s, settings.liveness_interval_s)
-    logger.info(
-        "watching %d root(s) every %.0fs -> %s (settle %.0fs, %s links)",
-        len(settings.sources),
-        settings.poll_interval_s,
-        settings.clone_root,
-        settings.settle_s,
-        settings.link_mode,
-    )
-
+    grace = settings.liveness_grace_s if args.grace is None else max(0.0, args.grace)
     try:
-        next_scan = 0.0
-        next_liveness = 0.0
-        paused_roots: set[str] = set()
-        while not stop.is_set():
-            if time.monotonic() >= next_scan:
-                next_scan = time.monotonic() + settings.poll_interval_s
-                scans = {}
-                for source in settings.sources:
-                    try:
-                        scans[source.root_id] = scanner.enumerate_root(source)
-                    except ScanError as exc:
-                        logger.error("scan failed for %s: %s", source.root_id, exc)
-                signatures = {root_id: scan.signature for root_id, scan in scans.items()}
-                ready = watcher.poll(signatures)
-                if ready and not stop.is_set():
-                    logger.info("reconciling %s", ", ".join(ready))
-                    report = pipeline.sync(
-                        root_ids=tuple(ready), trigger="watch", scans=scans
-                    )
-                    for outcome in report.roots:
-                        if outcome.error:
-                            logger.error("%s: %s", outcome.root_id, _first_line(outcome.error))
-                        elif outcome.unchanged:
-                            logger.debug("%s: unchanged", outcome.root_id)
-                        else:
-                            logger.info("%s: %s", outcome.root_id, _root_line(outcome).strip())
-                        if outcome.result:
-                            for error in outcome.result.errors:
-                                logger.error("%s: %s", outcome.root_id, error)
-            if (
-                settings.liveness_interval_s > 0
-                and not stop.is_set()
-                and time.monotonic() >= next_liveness
-            ):
-                next_liveness = time.monotonic() + settings.liveness_interval_s
-                swept = sweeper.sweep()
-                for path in swept.pruned:
-                    logger.info("pruned %s (source gone)", path)
-                for error in swept.errors:
-                    logger.warning("%s", error)
-                for root_id in sorted(swept.paused_roots - paused_roots):
-                    logger.warning(
-                        "pruning paused for %s: its path is not readable, so no entry "
-                        "under it is removed until it comes back",
-                        root_id,
-                    )
-                for root_id in sorted(paused_roots - swept.paused_roots):
-                    logger.info("pruning resumed for %s", root_id)
-                paused_roots = swept.paused_roots
-            refresher.tick()
-            stop.wait(tick_s)
-    except KeyboardInterrupt:
-        logger.info("interrupted")
+        sweeper = LivenessSweeper(
+            settings, store, Linker(settings.link_mode), dry_run=dry_run
+        )
+        result = sweeper.sweep(grace_s=grace, force_tree=True)
+        # A one-shot run has no earlier observation to compare against, so the
+        # first pass can only start the clock. Waiting the window once is what
+        # makes the command actually able to prune, and it is bounded by the
+        # configured grace (2 s by default).
+        if grace > 0 and sweeper.pending:
+            _stop_event().wait(grace)
+            result = sweeper.sweep(grace_s=grace, force_tree=True)
+        lines = [f"media-forge {__version__}  {'dry run' if dry_run else 'apply'}"]
+        lines += _sweep_lines(result, grace=grace)
+        _emit(args, _sweep_payload(result, dry_run=dry_run), lines)
+        return EXIT_OK if not result.errors else EXIT_PROBLEMS
     finally:
-        logger.info("stopping")
         store.close()
         lock.release()
-    return EXIT_OK
+
+
+def _cmd_daemon(args: argparse.Namespace) -> int:
+    """Run the verbs on a clock. It writes nothing and holds no lock.
+
+    Every action is a child process, so a plugin that dies takes one run down
+    and every log line names a command that can be typed by hand.
+    """
+    settings = _load(args)
+    logger = configure(settings)
+    extra: tuple[str, ...] = ()
+    if args.dry_run:
+        extra = ("--dry-run",)
+    elif args.apply:
+        extra = ("--apply",)
+    daemon = Daemon(
+        settings,
+        runner=SubprocessRunner(settings, extra_args=extra, logger=logger),
+        logger=logger,
+        stop=_stop_event(),
+    )
+    return daemon.run()
 
 
 def _stop_event() -> threading.Event:
@@ -427,10 +408,18 @@ def _cmd_status(args: argparse.Namespace) -> int:
     for source in settings.sources:
         lines.append(f"source       {source.root_id:<8} {source.path}")
     lines.append(f"dry run      {settings.dry_run}")
+    sweep = (
+        f"every {settings.liveness_interval_s:g}s"
+        if settings.liveness_interval_s > 0
+        else "off"
+    )
     lines.append(
         f"links        {settings.link_mode} "
-        f"(liveness every {settings.liveness_interval_s:g}s, "
-        f"grace {settings.liveness_grace_s:g}s)"
+        f"(sweep {sweep}, grace {settings.liveness_grace_s:g}s)"
+    )
+    lines.append(
+        f"watch        {settings.watch_mode} "
+        f"(settle {settings.settle_s:g}s, poll {settings.poll_interval_s:g}s)"
     )
     lines.append(
         f"jellyfin     {settings.jellyfin_url} "
@@ -710,13 +699,43 @@ def build_parser() -> argparse.ArgumentParser:
     sync.add_argument("--dry-run", action="store_true", help="force a dry run")
     sync.add_argument("--apply", action="store_true", help="force writes, overriding MF_DRY_RUN")
     sync.add_argument("--limit", type=int, default=40, help="ops to list in a dry run")
+    sync.add_argument(
+        "--full",
+        action="store_true",
+        help="also run the clone-tree sweep, which repairs dangling links",
+    )
+    sync.add_argument("--trigger", default="manual", help=argparse.SUPPRESS)
     sync.set_defaults(func=_cmd_sync)
 
-    watch = sub.add_parser("watch", help="poll the sources and reconcile as they change")
+    sweep = sub.add_parser("sweep", help="remove dangling entries once")
+    common(sweep)
+    sweep.add_argument("--dry-run", action="store_true", help="force a dry run")
+    sweep.add_argument("--apply", action="store_true", help="force writes, overriding MF_DRY_RUN")
+    sweep.add_argument(
+        "--grace",
+        type=float,
+        default=None,
+        help="seconds a source must stay missing (default: MF_LIVENESS_GRACE_SECONDS)",
+    )
+    sweep.set_defaults(func=_cmd_sweep)
+
+    daemon = sub.add_parser(
+        "daemon", help="run sync/sweep on a clock, from filesystem events"
+    )
+    common(daemon)
+    daemon.add_argument("--dry-run", action="store_true", help="force a dry run")
+    daemon.add_argument(
+        "--apply", action="store_true", help="force writes, overriding MF_DRY_RUN"
+    )
+    daemon.set_defaults(func=_cmd_daemon)
+
+    watch = sub.add_parser(
+        "watch", help="the old name for 'daemon'; kept so a deployed task keeps working"
+    )
     common(watch)
     watch.add_argument("--dry-run", action="store_true", help="force a dry run")
     watch.add_argument("--apply", action="store_true", help="force writes, overriding MF_DRY_RUN")
-    watch.set_defaults(func=_cmd_watch)
+    watch.set_defaults(func=_cmd_daemon)
 
     status = sub.add_parser("status", help="state, libraries and the last runs")
     common(status, sources=False)

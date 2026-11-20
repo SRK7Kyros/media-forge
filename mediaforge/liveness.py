@@ -82,9 +82,18 @@ class LivenessSweeper:
         self._next_tree_sweep = 0.0
         self._run_id: int | None = None
 
-    def sweep(self) -> SweepResult:
+    def sweep(
+        self, *, grace_s: float | None = None, force_tree: bool = False
+    ) -> SweepResult:
+        """One pass. ``grace_s`` overrides the configured flap window.
+
+        A one-shot caller (the ``sweep`` verb, ``sync --full``) has no earlier
+        observation to compare against, so it either waits the window itself or
+        passes ``grace_s=0`` after having waited; the daemon does the latter.
+        """
         result = SweepResult()
         now = self._clock()
+        grace = self.settings.liveness_grace_s if grace_s is None else max(0.0, grace_s)
         self._run_id = None
         available = self._available_roots(result)
         seen: set[str] = set()
@@ -98,7 +107,7 @@ class LivenessSweeper:
                 self._missing_since.pop(key, None)
                 continue
             first_seen = self._missing_since.setdefault(key, now)
-            if now - first_seen < self.settings.liveness_grace_s:
+            if now - first_seen < grace:
                 continue
             self._prune(row, result)
             self._missing_since.pop(key, None)
@@ -106,7 +115,7 @@ class LivenessSweeper:
         for key in [key for key in self._missing_since if key not in seen]:
             del self._missing_since[key]
 
-        walked = self._tree_sweep(now, available, result)
+        walked = self._tree_sweep(now, available, result, grace_s=grace, force=force_tree)
 
         if self._run_id is not None:
             self.store.finish_run(
@@ -120,6 +129,11 @@ class LivenessSweeper:
             self._prune_folder_nfos(libraries)
             prune_empty_library_dirs(self.settings, libraries)
         return result
+
+    @property
+    def pending(self) -> int:
+        """Entries seen missing but still inside the grace window."""
+        return len(self._missing_since) + len(self._orphan_missing_since)
 
     def _available_roots(self, result: SweepResult) -> dict[str, bool]:
         """Whether each source root can be read right now.
@@ -138,7 +152,13 @@ class LivenessSweeper:
         return available
 
     def _tree_sweep(
-        self, now: float, available: Mapping[str, bool], result: SweepResult
+        self,
+        now: float,
+        available: Mapping[str, bool],
+        result: SweepResult,
+        *,
+        grace_s: float,
+        force: bool = False,
     ) -> set[str]:
         """Walk the clone tree for dangling links no database row explains.
 
@@ -149,7 +169,7 @@ class LivenessSweeper:
         rows were pruned by an earlier process that then died.
         """
         interval = self.settings.orphan_scan_interval_s
-        if interval <= 0 or now < self._next_tree_sweep:
+        if not force and (interval <= 0 or now < self._next_tree_sweep):
             return set()
         self._next_tree_sweep = now + interval
         roots = [
@@ -180,7 +200,7 @@ class LivenessSweeper:
                     if not any(fsutil.is_within(target, root) for root in roots):
                         continue
                     first_seen = self._orphan_missing_since.setdefault(key, now)
-                    if now - first_seen < self.settings.liveness_grace_s:
+                    if now - first_seen < grace_s:
                         continue
                     self._prune_orphan(path, library, target, result)
                     self._orphan_missing_since.pop(key, None)
