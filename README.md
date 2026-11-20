@@ -73,6 +73,11 @@ verdict: clean
 database to vouch for it. `plan` is the same question asked before writing
 anything, and `sync` prints the same rows after doing them.
 
+`pruned 1` counts *files*, not operations: removing one episode plans four - its
+link, its episode NFO, and the two folders whose emptiness is then re-checked -
+and a folder that still holds episodes is simply left alone. A run that changes
+nothing says `unchanged` and touches neither the disk nor the database.
+
 ## Commands
 
 | command | what it does |
