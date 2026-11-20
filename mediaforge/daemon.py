@@ -290,7 +290,11 @@ class Daemon:
 
     def _run_sweep(self, *, windowed: bool) -> None:
         self.stats.sweeps += 1
-        self.sweep_at = None
+        if not windowed:
+            self.sweep_at = None
+        # An idle sweep must not swallow a scheduled one: the delete that asked
+        # for it is still waiting, and a sweep that fires before its window is
+        # exactly what the window exists to prevent.
         self.next_sweep = self._now() + self.settings.liveness_interval_s
         # A scheduled sweep has already waited the window; an idle one asks the
         # child for the configured window, and the child waits it only when there

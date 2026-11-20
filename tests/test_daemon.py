@@ -192,6 +192,30 @@ def test_a_delete_waits_the_grace_window_before_sweeping(tmp_path: Path) -> None
     assert runner.calls == [("sweep", "--grace", "0")]
 
 
+def test_an_idle_sweep_does_not_swallow_a_scheduled_one(tmp_path: Path) -> None:
+    """The probe's own defect: the idle clock wiped a pending delete window.
+
+    With the idle clock faster than the grace window, an idle sweep runs while a
+    delete is still being waited out. If that run consumed ``sweep_at`` the
+    delete would be answered by the next idle sweep - before its window - and the
+    only trace would be an ordering nobody reads.
+    """
+    clock = Clock()
+    daemon, runner, _ = _daemon(tmp_path, clock, liveness_interval_s=3, liveness_grace_s=5)
+    daemon.tick()  # full pass
+    daemon.tick()  # the idle sweep is due at startup
+    runner.calls.clear()
+
+    daemon.absorb((Event(EventKind.DELETED, "shows"),))  # schedules one at t+5
+    clock.advance(3)
+    daemon.tick()  # the idle clock, not the window
+    assert runner.calls == [("sweep",)]
+
+    clock.advance(2)
+    daemon.tick()  # the window has passed, so this one prunes now
+    assert runner.calls[-1] == ("sweep", "--grace", "0")
+
+
 def test_an_overflow_forces_a_full_pass_and_a_sweep(tmp_path: Path) -> None:
     clock = Clock()
     daemon, runner, _ = _daemon(tmp_path, clock)
